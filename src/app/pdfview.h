@@ -165,6 +165,8 @@ private:
     // Vertical offset of a page's top edge. In continuous mode this is its
     // place in the strip; in single-page mode every page sits at the top.
     int  pageTop(int pageIndex) const;
+    // Read every page's size from PDFium once. Called when a document is bound.
+    void loadPageSizes();
     const QImage* imageFor(int pageIndex);   // renders on demand
     void trimCache();
     void invalidateAll();
@@ -191,6 +193,13 @@ private:
     int           currentPage_ = 0;
 
     std::vector<PageGeom> geom_;
+    // Page sizes in points, filled once per document.
+    //
+    // These used to be fetched from PDFium on every call, and relayout() asks
+    // for every page -- so each zoom step or window resize cost two full passes
+    // of FPDF_GetPageSizeByIndex over the document (fitWidth scans once, then
+    // relayout scans again). A page's size never changes, so it is read once.
+    std::vector<QSizeF> pageSizes_;
     int totalHeight_ = 0;
     int margin_ = 12;        // gap between pages and around the strip
 
@@ -206,6 +215,14 @@ private:
     QPoint panOrigin_;
     int    panStartX_ = 0;
     int    panStartY_ = 0;
+
+    // While a fit-mode resize is in progress the cached rasters are stale but
+    // still usable: they are drawn scaled into the new page rectangles, and one
+    // deferred timer re-renders them crisply once the resize settles. Without
+    // the deferral, every resize event dropped the cache and re-rendered the
+    // visible pages, which made dragging a window edge visibly stutter.
+    bool    deferRerender_ = false;
+    QTimer* rerenderTimer_ = nullptr;
 
     pre::PageIndex* index_ = nullptr;   // text data; not owned
     TextPos         anchor_;

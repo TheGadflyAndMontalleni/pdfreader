@@ -144,9 +144,38 @@ int main(int argc, char** argv) {
                        "highlight | underline | strikeout."),
         QStringLiteral("kind"));
     parser.addOption(markupOpt);
+
+    QCommandLineOption benchOpt(
+        QStringLiteral("bench"),
+        QStringLiteral("Open FILE, time rendering/scrolling/zooming, print a report "
+                       "and exit."),
+        QStringLiteral("file"));
+    parser.addOption(benchOpt);
     parser.process(app);
 
     MainWindow window;
+
+    if (parser.isSet(benchOpt)) {
+        PrepareTestOutput();
+        const QString src = parser.value(benchOpt);
+        const bool    opened = window.openDocument(src);
+        // A hidden window has a ~33x16 viewport, which makes every measurement
+        // meaningless. Size and show it before timing anything.
+        window.resize(1400, 900);
+        window.show();
+        QTimer::singleShot(1800, &app, [&] {
+            if (!opened) {
+                std::printf("BENCH FAIL: cannot open %s\n", src.toUtf8().constData());
+            } else {
+                std::printf("%s\n", window.runBenchmark().toUtf8().constData());
+                std::printf("%s\n", window.benchmarkResize().toUtf8().constData());
+                std::fflush(stdout);
+            }
+            QApplication::quit();
+        });
+        app.exec();
+        return opened ? 0 : 1;
+    }
 
     if (parser.isSet(printTestOpt)) {
         PrepareTestOutput();

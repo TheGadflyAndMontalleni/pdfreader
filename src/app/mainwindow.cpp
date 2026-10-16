@@ -1503,6 +1503,151 @@ void MainWindow::printDocument() {
                              6000);
 }
 
+QString MainWindow::runBenchmark() {
+    QStringList out;
+    if (!view_ || !index_) return QStringLiteral("no document");
+
+    const int pageCount = index_->PageCount();
+    out << QString("document      : %1 page(s)").arg(pageCount);
+
+    view_->setFitMode(PdfView::FitMode::Width);
+    QCoreApplication::processEvents();
+
+    const double zoom = view_->zoom();
+    const int vw = view_->viewport()->width();
+    const int vh = view_->viewport()->height();
+    out << QString("viewport      : %1 x %2 px").arg(vw).arg(vh);
+    out << QString("fit-width zoom: %1  (%2%)").arg(zoom, 0, 'f', 3)
+               .arg(static_cast<int>(zoom * 100));
+
+    // How big is one cached page at this zoom, and how long does it take?
+    double ptW = 0, ptH = 0;
+    pre::PageSize(document_->handle(), 0, &ptW, &ptH);
+    const int pxW = static_cast<int>(ptW * zoom);
+    const int pxH = static_cast<int>(ptH * zoom);
+    out << QString("page raster   : %1 x %2 px = %3 MB")
+               .arg(pxW).arg(pxH)
+               .arg(pxW * 4.0 * pxH / (1024.0 * 1024.0), 0, 'f', 1);
+    out << QString("cache budget  : 10 pages = %1 MB")
+               .arg(pxW * 4.0 * pxH * 10 / (1024.0 * 1024.0), 0, 'f', 1);
+
+    // Cold render: the cost that shows up as a stall when a new page scrolls in.
+    {
+        QElapsedTimer t;
+        t.start();
+        pre::RenderedPage scratch;
+        int done = 0;
+        const int probe = std::min(5, pageCount);
+        for (int p = 0; p < probe; ++p) {
+            if (pre::RenderPage(document_->handle(), p, zoom, &scratch)) ++done;
+        }
+        const double ms = done > 0 ? static_cast<double>(t.elapsed()) / done : -1;
+        out << QString("cold render   : %1 ms/page").arg(ms, 0, 'f', 1);
+    }
+
+    // Warm repaint: cached images blitted to the viewport.
+    view_->goToFirstPage();
+    view_->repaint();
+    {
+        QElapsedTimer t;
+        t.start();
+        constexpr int kRepaints = 10;
+        for (int i = 0; i < kRepaints; ++i) view_->repaint();
+        out << QString("repaint (warm): %1 ms/frame")
+                   .arg(static_cast<double>(t.elapsed()) / kRepaints, 0, 'f', 1);
+    }
+
+    // Scrolling: each step moves one viewport height, so new pages come in cold.
+    {
+        QElapsedTimer t;
+        t.start();
+        const int step = std::max(80, vh / 2);
+        constexpr int kSteps = 20;
+        for (int i = 0; i < kSteps; ++i) {
+            view_->verticalScrollBar()->setValue(view_->verticalScrollBar()->value() + step);
+            view_->repaint();
+        }
+        out << QString("scroll        : %1 ms/step (step=%2 px, includes cold pages)")
+                   .arg(static_cast<double>(t.elapsed()) / kSteps, 0, 'f', 1).arg(step);
+    }
+
+    // Zoom: every step invalidates the whole cache and re-renders.
+    {
+        QElapsedTimer t;
+        t.start();
+        constexpr int kZooms = 5;
+        for (int i = 0; i < kZooms; ++i) {
+            view_->setZoom(zoom * (1.0 + 0.05 * (i + 1)));
+            view_->repaint();
+        }
+        out << QString("zoom          : %1 ms/step (cache dropped each time)")
+                   .arg(static_cast<double>(t.elapsed()) / kZooms, 0, 'f', 1);
+    }
+
+    view_->setZoom(zoom);
+    view_->goToFirstPage();
+    return out.join(QLatin1Char('\n'));
+}
+
+QString MainWindow::benchmarkResize() {
+    // Dragging a window edge in fit mode re-runs fit + relayout + a full cache
+    // drop for every resize event, so this is the path most likely to feel
+    // sticky. It is measured separately because it needs the real window.
+    if (!view_) return QString();
+
+    auto runResize = [this](int steps) {
+        QElapsedTimer t;
+        t.start();
+        for (int i = 0; i < steps; ++i) {
+            resize(1200 + (i % 4) * 60, 820 + (i % 3) * 40);
+            QCoreApplication::processEvents();
+        }
+        return static_cast<double>(t.elapsed()) / steps;
+    };
+
+    // A/B: with the fit mode off, resizeEvent does nothing but relayout the
+    // window. The difference is what the fit path actually costs.
+    const PdfView::FitMode saved = view_->fitMode();
+    view_->setFitMode(PdfView::FitMode::None);
+    const double plain = runResize(12);
+    view_->setFitMode(saved);
+    const double fitting = runResize(12);
+
+    // Second A/B, on the thumbnail strip: an IconMode QListView with
+    // ResizeMode::Adjust re-lays out every item whenever the view is resized.
+    QString thumbsNote = QStringLiteral("no thumbnail strip");
+    if (thumbs_) {
+        thumbs_->setResizeMode(QListView::Fixed);
+        const double fixedMode = runResize(12);
+        thumbs_->setResizeMode(QListView::Adjust);
+        thumbsNote = QString("thumbnail strip adds %1 ms (Adjust) vs %2 ms (Fixed)")
+                         .arg(fitting - fixedMode, 0, 'f', 1)
+                         .arg(fixedMode, 0, 'f', 1);
+    }
+
+    // Third A/B, on the sidebar as a whole. The wrapped status label is the
+    // suspect: height-for-width labels can force repeated layout passes.
+    QString sidebarNote = QStringLiteral("no sidebar");
+    if (sideTabs_) {
+        sideTabs_->hide();
+        const double noSidebar = runResize(12);
+        sideTabs_->show();
+        sidebarNote = QString("sidebar costs %1 ms of the %2 ms")
+                          .arg(fitting - noSidebar, 0, 'f', 1)
+                          .arg(fitting, 0, 'f', 1);
+    }
+
+    return QString("resize        : %1 ms/step fitting, %2 ms/step plain window "
+                   "relayout (fit path adds %3 ms)\n"
+                   "                %4\n"
+                   "                %5")
+        .arg(fitting, 0, 'f', 1)
+        .arg(plain, 0, 'f', 1)
+        .arg(fitting - plain, 0, 'f', 1)
+        .arg(thumbsNote)
+        .arg(sidebarNote);
+}
+
 int MainWindow::printToPdf(const QString& outPath, int firstPage, int lastPage,
                            QString* detail) {
     if (!document_ || !index_) return -1;

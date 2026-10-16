@@ -36,7 +36,11 @@ bool RenderPage(FPDF_DOCUMENT doc, int pageIndex, double scale, RenderedPage* ou
     out->stride = stride;
     out->pixels.assign(static_cast<size_t>(stride) * static_cast<size_t>(ph), 0xFF);
 
-    FPDF_BITMAP bitmap = FPDFBitmap_CreateEx(pw, ph, FPDFBitmap_BGRA,
+    // BGRx, not BGRA: the fourth byte is documented as unused, so the buffer is
+    // opaque and Qt can blit it with a plain copy. With BGRA the alpha channel
+    // carries coverage, and Qt alpha-blends every pixel of every page on every
+    // repaint -- several million blends per frame for a full-screen page.
+    FPDF_BITMAP bitmap = FPDFBitmap_CreateEx(pw, ph, FPDFBitmap_BGRx,
                                              out->pixels.data(), stride);
     if (!bitmap) {
         FPDF_ClosePage(page);

@@ -165,6 +165,12 @@ public:
     // Reopen the documents that were open when the app last exited.
     void restoreSessionTabs();
 
+    // Time the operations a reader actually performs: rendering a page,
+    // repainting the viewport, scrolling and zooming. Returns a text report.
+    QString runBenchmark();
+    // Resizing needs the real top-level window, so it is timed separately.
+    QString benchmarkResize();
+
     // Verification aid: print a page range straight to a PDF file (no dialog)
     // and reopen the result to count its pages. Returns the page count, or -1.
     int printToPdf(const QString& outPath, int firstPage, int lastPage, QString* detail);

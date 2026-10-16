@@ -95,7 +95,7 @@ void ThumbnailStrip::generateOne(int pageIndex) {
     if (!pre::RenderPage(doc_, pageIndex, scale, &buffer_)) return;
 
     const QImage img = QImage(buffer_.pixels.data(), buffer_.width, buffer_.height,
-                              buffer_.stride, QImage::Format_ARGB32)
+                              buffer_.stride, QImage::Format_RGB32)
                            .copy();
 
     QListWidgetItem* item = this->item(pageIndex);

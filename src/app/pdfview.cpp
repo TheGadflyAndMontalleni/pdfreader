@@ -5,6 +5,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QTimer>
 #include <QScrollBar>
 #include <QWheelEvent>
 
@@ -35,6 +36,17 @@ PdfView::PdfView(QWidget* parent) : QAbstractScrollArea(parent) {
     viewport()->setAutoFillBackground(false);
     verticalScrollBar()->setSingleStep(40);
     horizontalScrollBar()->setSingleStep(40);
+
+    // One deferred re-render after a burst of resize events.
+    rerenderTimer_ = new QTimer(this);
+    rerenderTimer_->setSingleShot(true);
+    rerenderTimer_->setInterval(140);
+    connect(rerenderTimer_, &QTimer::timeout, this, [this] {
+        if (!deferRerender_) {
+            invalidateAll();
+            viewport()->update();
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +61,7 @@ void PdfView::setDocument(FPDF_DOCUMENT doc, int pageCount, pre::PageIndex* inde
     clearSelection();
     clearFindResults();
     invalidateAll();
+    loadPageSizes();
     relayout();
     verticalScrollBar()->setValue(0);
     horizontalScrollBar()->setValue(0);
@@ -61,6 +74,7 @@ void PdfView::clearDocument() {
     index_ = nullptr;
     pageCount_ = 0;
     currentPage_ = 0;
+    pageSizes_.clear();
     clearSelection();
     invalidateAll();
     geom_.clear();
@@ -75,11 +89,20 @@ void PdfView::invalidateAll() {
 }
 
 QSizeF PdfView::pageSizePoints(int pageIndex) const {
-    double w = 0, h = 0;
-    if (doc_ && pageIndex >= 0 && pageIndex < pageCount_) {
-        pre::PageSize(doc_, pageIndex, &w, &h);
+    if (pageIndex < 0 || pageIndex >= static_cast<int>(pageSizes_.size())) {
+        return QSizeF(0, 0);
     }
-    return QSizeF(w, h);
+    return pageSizes_[static_cast<size_t>(pageIndex)];
+}
+
+void PdfView::loadPageSizes() {
+    pageSizes_.clear();
+    pageSizes_.reserve(static_cast<size_t>(std::max(0, pageCount_)));
+    for (int i = 0; i < pageCount_; ++i) {
+        double w = 0, h = 0;
+        if (doc_) pre::PageSize(doc_, i, &w, &h);
+        pageSizes_.emplace_back(w, h);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,10 +198,12 @@ const QImage* PdfView::imageFor(int pageIndex) {
 
     if (!pre::RenderPage(doc_, pageIndex, zoom_, &buffer_)) return nullptr;
 
-    // PDFium writes BGRA, which is Qt's Format_ARGB32 byte order on
-    // little-endian hosts. copy() detaches from the scratch buffer.
+    // PDFium writes BGRx, whose byte order matches Format_RGB32 on
+    // little-endian hosts. RGB32 has no alpha channel, so drawImage() takes the
+    // opaque fast path instead of blending every pixel. copy() detaches from
+    // the scratch buffer.
     QImage img = QImage(buffer_.pixels.data(), buffer_.width, buffer_.height,
-                        buffer_.stride, QImage::Format_ARGB32)
+                        buffer_.stride, QImage::Format_RGB32)
                      .copy();
     if (invert_) img.invertPixels(QImage::InvertRgb);
     auto inserted = cache_.emplace(pageIndex, std::move(img));
@@ -242,7 +267,11 @@ void PdfView::paintEvent(QPaintEvent*) {
         const QImage* img = imageFor(i);
         const int x = margin_ + std::max(0, (viewportWidth() - 2 * margin_ - g.width) / 2);
         if (img && !img->isNull()) {
-            painter.drawImage(QPoint(x - left, ptop - top), *img);
+            // Drawing into the target rectangle rather than at 1:1 means a
+            // raster rendered for an older zoom still lands correctly while a
+            // resize is in progress. When the sizes match this is still a plain
+            // blit.
+            painter.drawImage(QRect(x - left, ptop - top, g.width, g.height), *img);
         } else {
             painter.fillRect(QRect(x - left, ptop - top, g.width, g.height),
                              QColor(0xff, 0xff, 0xff));
@@ -357,7 +386,9 @@ void PdfView::setZoom(double zoom) {
     }
 
     zoom_ = zoom;
-    invalidateAll();
+    // A fit-driven resize keeps the old rasters for the moment; they are drawn
+    // scaled until the deferred timer replaces them.
+    if (!deferRerender_) invalidateAll();
     relayout();
 
     if (viewMode_ == ViewMode::Continuous && !geom_.empty()) {
@@ -768,9 +799,14 @@ void PdfView::resizeEvent(QResizeEvent* event) {
     QAbstractScrollArea::resizeEvent(event);
     // The viewport is final here, unlike in the owning window's resizeEvent,
     // so this is the only place a fit zoom can be computed safely.
-    if (doc_ && pageCount_ > 0) {
+    if (doc_ && pageCount_ > 0 && fitMode_ != FitMode::None) {
+        // Recompute the zoom and lay out now, but leave the cache alone; the
+        // paint below scales the existing rasters into the new rectangles.
+        deferRerender_ = true;
         if (fitMode_ == FitMode::Width) fitWidth();
-        else if (fitMode_ == FitMode::Page) fitPage();
+        else                            fitPage();
+        deferRerender_ = false;
+        if (rerenderTimer_) rerenderTimer_->start();
     }
     updateScrollBars();
 }

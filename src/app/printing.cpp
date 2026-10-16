@@ -142,7 +142,7 @@ PrintOutcome PrintPages(FPDF_DOCUMENT doc, int pageCount, QPrinter& printer,
         // PDFium writes BGRA, which is Format_ARGB32's byte order on
         // little-endian hosts. No copy: the buffer lives until the next page.
         const QImage img(page.pixels.data(), page.width, page.height, page.stride,
-                         QImage::Format_ARGB32);
+                         QImage::Format_RGB32);
 
         const double dstW = ptW * fit * ptToDevice;
         const double dstH = ptH * fit * ptToDevice;
