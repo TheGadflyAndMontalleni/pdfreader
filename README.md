@@ -21,10 +21,42 @@ pwsh -NoProfile -File tools/verify.ps1
 
 # 打包成单个 exe（可选）
 pwsh -NoProfile -File tools/make_sfx.ps1
+
+# 装成你自己的 PDF 阅读器（可选）
+pwsh -NoProfile -File tools/install.ps1
 ```
 
 `verify.ps1` 是这份交付的**证据**：它把下面每一条声明都跑一遍并打印 PASS/FAIL。
 `-SkipBuild` 跳过重新编译，`-Corpus <目录>` 换一个语料目录做目录覆盖率普查。
+
+### 装成系统里的 PDF 阅读器
+
+```powershell
+pwsh -NoProfile -File tools/install.ps1              # 安装
+pwsh -NoProfile -File tools/install.ps1 -SetDefault  # 顺带尝试设为默认
+pwsh -NoProfile -File tools/uninstall.ps1            # 卸载
+```
+
+安装脚本做的事（**全部写在 HKCU，不需要管理员权限，不碰系统其它部分**）：
+
+1. 把程序复制到 `%LOCALAPPDATA%\Programs\PDFReader\`
+2. 建开始菜单快捷方式
+3. 注册 ProgID `PDFReader.pdf`、`.pdf\OpenWithProgids`、`Applications\PDFReader.exe`
+   和 `RegisteredApplications` —— 于是它同时出现在**右键「打开方式」**和
+   **设置 → 默认应用**里
+4. 通知资源管理器刷新关联缓存
+
+装完之后：
+
+- **右键任意 PDF → 打开方式 → PDF Reader**
+- 或**开始菜单搜索 "PDF Reader"**
+- 想设为默认：`-SetDefault` 会打开 Windows 的「默认应用」页。Windows 10+
+  用只有设置界面能生成的哈希保护默认程序选择，脚本**无法**静默接管 ——
+  这是系统的设计，只能你在那页点两下。
+
+卸载只删除它自己创建的东西；你的阅读记录和最近文件留在
+`%LOCALAPPDATA%\pdfreader\settings.ini`，需要的话手动删。
+
 
 ### 构建前提
 
