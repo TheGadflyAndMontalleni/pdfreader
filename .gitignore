@@ -1,0 +1,32 @@
+# ---- build output ---------------------------------------------------------
+/build/
+/dist/
+/.venv/
+*.obj
+*.o
+*.exe
+
+# ---- bundled toolchain and prebuilt dependencies --------------------------
+# These are downloaded, not authored: Qt (~450 MB), MinGW (~620 MB) and the
+# PDFium prebuilt. See "构建前提" in README.md for where each comes from.
+/tools/Tools/
+/tools/bin/
+/tools/lib/
+/tools/include/
+/tools/plugins/
+/tools/mkspecs/
+/tools/metatypes/
+/tools/modules/
+/tools/sbom/
+/tools/doc/
+/tools/downloads/
+/tools/pdfium/
+/tools/__pycache__/
+__pycache__/
+
+# ---- editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+*.user
+Thumbs.db
+desktop.ini
