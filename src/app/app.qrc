@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <!-- Qt's own window icon. Windows draws the taskbar button from the exe
+         resource, but the title bar and Alt-Tab thumbnail come from here. -->
+    <qresource prefix="/">
+        <file>icon.png</file>
+    </qresource>
+</RCC>

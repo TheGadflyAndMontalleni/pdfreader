@@ -1,0 +1,43 @@
+// Windows resources for pdfreader.exe.
+//
+// The icon has to live in the executable, not just in a file next to it:
+// Explorer, the taskbar, the Alt-Tab list and the "Open with" dialog all read
+// the icon from the PE resource table. tools/make_icon.ps1 generates app.ico.
+#include <windows.h>
+
+// 1 is the lowest resource id; Windows uses the first icon it finds as the
+// application icon.
+IDI_APP_ICON ICON "app.ico"
+
+// Right-click > Properties > Details. Without this the fields are all blank,
+// which is part of why an executable reads as "some file" rather than as an
+// installed program.
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION     0,1,0,0
+    PRODUCTVERSION  0,1,0,0
+    FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+    FILEFLAGS       0
+    FILEOS          VOS_NT_WINDOWS32
+    FILETYPE        VFT_APP
+    FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0804 = Simplified Chinese, 04B0 = Unicode.
+        BLOCK "080404B0"
+        BEGIN
+            VALUE "CompanyName",      "TheGadflyAndMontalleni"
+            VALUE "FileDescription",  "PDF Reader"
+            VALUE "FileVersion",      "0.1.0.0"
+            VALUE "InternalName",     "pdfreader"
+            VALUE "OriginalFilename", "PDFReader.exe"
+            VALUE "ProductName",      "PDF Reader"
+            VALUE "ProductVersion",   "0.1.0.0"
+            VALUE "Comments",         "PDF reader with automatic table-of-contents reconstruction"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

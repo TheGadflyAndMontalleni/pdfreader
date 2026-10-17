@@ -187,6 +187,7 @@ private:
     ThumbnailStrip* thumbs_ = nullptr;
     QAction*       copyAction_ = nullptr;
     QAction*       invertAction_ = nullptr;
+    QAction*       lcdAction_ = nullptr;
     QMenu*         recentMenu_ = nullptr;
     QMenu*         markupMenu_ = nullptr;
     QToolBar*      findBar_ = nullptr;

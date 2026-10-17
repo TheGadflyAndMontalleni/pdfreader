@@ -4,6 +4,8 @@ project(pdfreader CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+# app.qrc embeds the window icon into the executable.
+set(CMAKE_AUTORCC ON)
 
 # Bundled toolchain locations (nothing installed system-wide).
 set(QT_PREFIX  "${CMAKE_SOURCE_DIR}/tools"        CACHE PATH "Qt prefix")
@@ -50,6 +52,10 @@ add_executable(toc_build tests/toc_build.cpp)
 target_link_libraries(toc_build PRIVATE pdfcore)
 
 # ---- the reader itself ----
+# app.rc carries the window icon into the PE resource table (Explorer, taskbar,
+# Alt-Tab and the "Open with" dialog all read it from there). app.qrc gives Qt
+# the same image for the title bar. Both are generated from one PNG by
+# tools/make_icon.ps1.
 add_executable(pdfreader WIN32
     src/app/main.cpp
     src/app/mainwindow.cpp
@@ -57,5 +63,7 @@ add_executable(pdfreader WIN32
     src/app/printing.cpp
     src/app/session.cpp
     src/app/thumbnails.cpp
+    src/app/app.rc
+    src/app/app.qrc
 )
 target_link_libraries(pdfreader PRIVATE pdfcore Qt6::Widgets Qt6::PrintSupport)

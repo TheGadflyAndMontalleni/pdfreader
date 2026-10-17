@@ -92,6 +92,51 @@ for ($i = 0; $i -lt $payload.Count; $i++) {
     $rel = $payload[$i] -replace '\\', '\\\\'
     [void]$sb.AppendLine("$($i + 1) RCDATA `"$rel`"")
 }
+
+# The packaged exe is the file the user actually double-clicks, so it needs the
+# icon too; otherwise Explorer shows a generic blank executable.
+$iconSrc = Join-Path $root 'src\app\app.ico'
+if (Test-Path $iconSrc) {
+    Copy-Item $iconSrc (Join-Path $stage 'launcher.ico') -Force
+    [void]$sb.AppendLine('#include <windows.h>')
+    [void]$sb.AppendLine('IDI_APP_ICON ICON "launcher.ico"')
+} else {
+    Write-Warning 'src\app\app.ico missing; the packaged exe will have no icon'
+}
+
+# Version block for the packaged exe. This is the file that ends up in the
+# user's Programs folder and in Explorer, so its Properties > Details must not be
+# blank -- verified by tools/verify.ps1.
+[void]$sb.AppendLine(@'
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION     0,1,0,0
+    PRODUCTVERSION  0,1,0,0
+    FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+    FILEFLAGS       0
+    FILEOS          VOS_NT_WINDOWS32
+    FILETYPE        VFT_APP
+    FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404B0"
+        BEGIN
+            VALUE "CompanyName",      "TheGadflyAndMontalleni"
+            VALUE "FileDescription",  "PDF Reader"
+            VALUE "FileVersion",      "0.1.0.0"
+            VALUE "InternalName",     "PDFReader"
+            VALUE "OriginalFilename", "PDFReader.exe"
+            VALUE "ProductName",      "PDF Reader"
+            VALUE "ProductVersion",   "0.1.0.0"
+            VALUE "Comments",         "PDF reader with automatic table-of-contents reconstruction"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
+'@)
 Set-Content -Path $rcPath -Value $sb.ToString() -Encoding ascii
 
 # ---- compile --------------------------------------------------------------

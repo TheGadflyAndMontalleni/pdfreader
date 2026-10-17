@@ -139,6 +139,41 @@ if (Test-Path $tocExe) {
     Record 'table-of-contents survey' $false "missing $tocExe"
 }
 
+Write-Host "`n=== 6. packaging artefacts ===" -ForegroundColor Cyan
+# The icon and the version block live in the PE resource table. Losing either is
+# silent: the app still runs, it just looks like an anonymous executable again.
+Add-Type -AssemblyName System.Drawing
+$sfxPath = Join-Path $PSScriptRoot '..\dist\PDFReader.exe'
+foreach ($candidate in @(
+        @{ Name = 'reader exe'; Path = $exe }
+        @{ Name = 'single-file package'; Path = $sfxPath }
+    )) {
+    if (-not (Test-Path $candidate.Path)) {
+        Record "$($candidate.Name) built" $false "missing $($candidate.Path)"
+        continue
+    }
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($candidate.Path)
+    $info = (Get-Item $candidate.Path).VersionInfo
+    Record "$($candidate.Name) has an icon" ($null -ne $icon) `
+           ("{0:N1} MB" -f ((Get-Item $candidate.Path).Length / 1MB))
+    $hasVersion = -not [string]::IsNullOrWhiteSpace($info.ProductName) -and
+                  -not [string]::IsNullOrWhiteSpace($info.FileVersion)
+    Record "$($candidate.Name) has version info" $hasVersion `
+           "$(if ($info.ProductName) { $info.ProductName } else { '(blank)' }) $($info.FileVersion)"
+    if ($icon) { $icon.Dispose() }
+}
+
+$iconSource = Join-Path $PSScriptRoot '..\src\app\app.ico'
+if (Test-Path $iconSource) {
+    # Windows asks for a different size per surface (16 in menus, 256 in the
+    # large-icon view), so a single-size icon would look blurry somewhere.
+    $iconBytes = [System.IO.File]::ReadAllBytes($iconSource)
+    $iconCount = [BitConverter]::ToUInt16($iconBytes, 4)
+    Record 'icon file carries multiple sizes' ($iconCount -ge 4) "$iconCount sizes"
+} else {
+    Record 'icon file exists' $false 'run tools/make_icon.ps1'
+}
+
 Write-Host "`n=== summary ===" -ForegroundColor Cyan
 $failed = @($script:Results | Where-Object { -not $_.Ok })
 foreach ($res in $script:Results) {

@@ -26,4 +26,11 @@ bool PageSize(FPDF_DOCUMENT doc, int pageIndex, double* width, double* height);
 // Rasterise `pageIndex` at `scale` (1.0 == 72 dpi).
 bool RenderPage(FPDF_DOCUMENT doc, int pageIndex, double scale, RenderedPage* out);
 
+// Turn subpixel (LCD) text on or off. PDFium's FPDF_LCD_TEXT renders RGB
+// fringes; those read as sharper on a normal LCD at 1:1, but the same fringes
+// are what makes text look less clean next to a renderer using plain grayscale
+// antialiasing. Exposed so the difference can be measured, not argued about.
+void SetLcdText(bool on);
+bool LcdText();
+
 }  // namespace pre

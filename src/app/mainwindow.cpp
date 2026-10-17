@@ -34,6 +34,7 @@
 #include "annot.h"
 #include "pdfview.h"
 #include "printing.h"
+#include "render.h"
 #include "session.h"
 #include "thumbnails.h"
 
@@ -125,6 +126,21 @@ void MainWindow::buildUi() {
     viewMenu->addAction(tr("单页视图"), QKeySequence(Qt::CTRL | Qt::Key_6), this, [this] {
         if (view_) view_->setViewMode(PdfView::ViewMode::SinglePage);
     });
+    viewMenu->addSeparator();
+
+    invertAction_ = viewMenu->addAction(tr("反色"), QKeySequence(Qt::Key_I), this,
+                                        &MainWindow::toggleInvert);
+    invertAction_->setCheckable(true);
+
+    // Off by default; see the comment on g_lcdText in render.cpp. Left exposed
+    // because on a normal LCD at exact 1:1 some people prefer it.
+    lcdAction_ = viewMenu->addAction(tr("次像素文字"), this, [this](bool on) {
+        pre::SetLcdText(on);
+        if (view_) view_->invalidateRenderedPages();
+    });
+    lcdAction_->setCheckable(true);
+    lcdAction_->setChecked(pre::LcdText());
+
     viewMenu->addSeparator();
     viewMenu->addAction(tr("跳转到页…"), QKeySequence(Qt::CTRL | Qt::Key_G), this,
                         &MainWindow::goToPageDialog);
@@ -1392,6 +1408,18 @@ bool MainWindow::runSelfTest(QString* report) {
                          .arg(msPerPage, 0, 'f', 1).arg(marks);
         }
     }
+
+    // Features that are only reachable from a menu need that menu checked, or
+    // they ship invisible. (The invert toggle was written, tested and
+    // documented before anyone noticed it had never been added to the View
+    // menu.)
+    check(invertAction_ != nullptr &&
+              invertAction_->shortcut() == QKeySequence(Qt::Key_I),
+          "the View menu offers invert on I");
+    check(lcdAction_ != nullptr,
+          "the View menu offers the subpixel-text toggle");
+    check(invertAction_ == nullptr || invertAction_->isCheckable(),
+          "the invert menu entry is a checkable toggle");
 
     if (report) *report = lines.join('\n');
     return ok;

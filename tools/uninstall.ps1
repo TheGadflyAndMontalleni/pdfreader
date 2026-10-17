@@ -21,6 +21,7 @@ $keys = @(
     'HKCU:\Software\Classes\PDFReader.pdf'
     'HKCU:\Software\Classes\Applications\PDFReader.exe'
     'HKCU:\Software\PDFReader'
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFReader'
 )
 foreach ($k in $keys) {
     if (Test-Path $k) {

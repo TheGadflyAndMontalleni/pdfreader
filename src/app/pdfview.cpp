@@ -267,11 +267,16 @@ void PdfView::paintEvent(QPaintEvent*) {
         const QImage* img = imageFor(i);
         const int x = margin_ + std::max(0, (viewportWidth() - 2 * margin_ - g.width) / 2);
         if (img && !img->isNull()) {
-            // Drawing into the target rectangle rather than at 1:1 means a
-            // raster rendered for an older zoom still lands correctly while a
-            // resize is in progress. When the sizes match this is still a plain
-            // blit.
-            painter.drawImage(QRect(x - left, ptop - top, g.width, g.height), *img);
+            if (img->width() == g.width && img->height() == g.height) {
+                // Steady state: draw at 1:1. This is a straight blit, and any
+                // resampling path here would soften every glyph on screen.
+                painter.drawImage(QPoint(x - left, ptop - top), *img);
+            } else {
+                // Only during a resize, where the raster still belongs to the
+                // previous zoom; scale it into place until the deferred
+                // re-render replaces it.
+                painter.drawImage(QRect(x - left, ptop - top, g.width, g.height), *img);
+            }
         } else {
             painter.fillRect(QRect(x - left, ptop - top, g.width, g.height),
                              QColor(0xff, 0xff, 0xff));

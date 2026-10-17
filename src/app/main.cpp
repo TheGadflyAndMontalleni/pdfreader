@@ -2,6 +2,7 @@
 // automatically, including for documents that ship no /Outlines.
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QTimer>
 
 #include <cstdio>
@@ -11,6 +12,12 @@
 #endif
 
 #include "mainwindow.h"
+
+// For --render-png: the raw PDFium output, without any Qt compositing.
+#include <QImage>
+
+#include "doc.h"
+#include "render.h"
 
 namespace {
 
@@ -34,6 +41,11 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("PDF Reader"));
     QApplication::setApplicationVersion(QStringLiteral("0.1"));
+
+    // Same artwork as the .ico in the PE resource table. Windows draws the
+    // taskbar button from the executable's icon, but the title bar, the
+    // window list and dialog headers come from Qt's own icon.
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icon.png")));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -151,9 +163,67 @@ int main(int argc, char** argv) {
                        "and exit."),
         QStringLiteral("file"));
     parser.addOption(benchOpt);
+
+    QCommandLineOption renderPngOpt(
+        QStringLiteral("render-png"),
+        QStringLiteral("Render FILE's page straight to --png-out and exit. Used to "
+                       "tell a soft render apart from soft compositing."),
+        QStringLiteral("file"));
+    parser.addOption(renderPngOpt);
+    QCommandLineOption pngOutOpt(QStringLiteral("png-out"),
+                                 QStringLiteral("Output PNG path for --render-png."),
+                                 QStringLiteral("path"));
+    parser.addOption(pngOutOpt);
+    QCommandLineOption noLcdOpt(QStringLiteral("no-lcd"),
+        QStringLiteral("Disable subpixel (LCD) text for --render-png."));
+    parser.addOption(noLcdOpt);
+    QCommandLineOption scaleOpt(QStringLiteral("scale"),
+                                QStringLiteral("Render scale for --render-png "
+                                               "(default 2.0)."),
+                                QStringLiteral("x"));
+    parser.addOption(scaleOpt);
     parser.process(app);
 
     MainWindow window;
+
+    // Pure PDFium render, bypassing the view entirely: this is what the page
+    // looks like before Qt composites it onto the screen.
+    if (parser.isSet(renderPngOpt)) {
+        PrepareTestOutput();
+        const QString src = parser.value(renderPngOpt);
+        const QString dst = parser.value(pngOutOpt);
+        const int     page = std::max(0, parser.value(pageOpt).toInt() - 1);
+        const double  scale = parser.value(scaleOpt).toDouble() > 0
+                                  ? parser.value(scaleOpt).toDouble()
+                                  : 2.0;
+
+        pre::Library  lib;
+        pre::Document doc;
+        std::string   err;
+        if (!doc.Open(src.toLocal8Bit().constData(), &err)) {
+            std::printf("RENDER FAIL: %s\n", err.c_str());
+            return 1;
+        }
+        // Only override when asked: an unconditional SetLcdText() here would
+        // silently undo the library default on every --render-png run.
+        if (parser.isSet(noLcdOpt)) pre::SetLcdText(false);
+        pre::RenderedPage pageData;
+        if (!pre::RenderPage(doc.handle(), page, scale, &pageData)) {
+            std::printf("RENDER FAIL: cannot render page %d\n", page + 1);
+            return 1;
+        }
+        QImage img(pageData.pixels.data(), pageData.width, pageData.height,
+                   pageData.stride, QImage::Format_RGB32);
+        if (!img.save(dst)) {
+            std::printf("RENDER FAIL: cannot write %s\n", dst.toUtf8().constData());
+            return 1;
+        }
+        std::printf("rendered page %d at scale %g -> %dx%d px -> %s\n", page + 1,
+                    scale, pageData.width, pageData.height,
+                    dst.toUtf8().constData());
+        std::fflush(stdout);
+        return 0;
+    }
 
     if (parser.isSet(benchOpt)) {
         PrepareTestOutput();
