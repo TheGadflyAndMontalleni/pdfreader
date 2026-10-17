@@ -3,18 +3,22 @@
 
 #include <QMainWindow>
 #include <QString>
+#include <QSet>
 
 #include <memory>
 
 #include "doc.h"
 #include "toc.h"
+#include "session.h"
 
 class QAction;
 class QCheckBox;
 class QCloseEvent;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QMenu;
+class QProcess;
 class QSplitter;
 class QTabBar;
 class QTabWidget;
@@ -22,7 +26,6 @@ class QToolBar;
 class QTreeWidget;
 class QTreeWidgetItem;
 class PdfView;
-class ThumbnailStrip;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -32,6 +35,12 @@ public:
     ~MainWindow() override;
 
     bool openDocument(const QString& path);
+    bool waitForTocs(int timeoutMs = 30000); // verification only; UI never waits
+    bool addBookmark(const QString& title = QString());
+    bool renameBookmark(int row, const QString& title);
+    bool removeBookmark(int row);
+    int bookmarkCount() const;
+    bool jumpToBookmark(int row);
 
     // Headless checks for the parts that matter: the TOC is built, every entry
     // has a target, and clicking an entry actually moves the view there.
@@ -78,6 +87,7 @@ private slots:
     void prevTab();
 
 private:
+    struct DocTab;
     void buildUi();
     void populateToc(const pre::TocTree& tree, const pre::ResolveStats& stats);
     void setTocStatus(const QString& text, bool warning);
@@ -86,6 +96,12 @@ private:
     void saveCurrentState();
     void rebuildRecentMenu();
     void openRecent(const QString& path);
+    void refreshBookmarks();
+    void editSelectedBookmark();
+    void startNextToc();
+    void finishToc(quint64 documentId, QProcess* worker, int exitCode);
+    void refreshToc();
+    void stopToc(DocTab* entry);
 
     // Declared before the documents so the PDFium library outlives them.
     pre::Library                    library_;
@@ -98,6 +114,14 @@ private:
         std::unique_ptr<pre::PageIndex> index;
         pre::TocTree                    toc;
         pre::ResolveStats               stats;
+        quint64                         id = 0;
+        bool                            tocPending = false;
+        bool                            tocFailed = false;
+        QProcess*                       tocProcess = nullptr;
+        QString                         tocCacheKey;
+        bool                            tocStateSaved = false;
+        QSet<QString>                   expandedToc;
+        QVector<app::Bookmark>          bookmarks;
         // Reading position and view configuration, persisted on switch and exit.
         // The mode enums are stored as ints so this header needs no Qt widget
         // types (PdfView is only forward-declared here).
@@ -119,6 +143,8 @@ private:
 
     std::vector<std::unique_ptr<DocTab>> tabs_;
     int activeTab_ = -1;
+    quint64 nextDocumentId_ = 0;
+    bool closing_ = false;
 
     // Borrowed pointers into the active tab, so the per-feature code below
     // reads the same whether or not tabs exist. `toc_` is the active tab's tree
@@ -144,7 +170,6 @@ public:
     int  activeFitMode() const;
     bool setActiveViewMode(int mode);
     bool setActiveFitMode(int mode);
-    ThumbnailStrip* thumbnails() { return thumbs_; }
     int  activePageCount() const;
     bool activeInvert() const;
     // Mean luminance of what is currently on screen, 0..255. Used to prove the
@@ -184,7 +209,17 @@ private:
     QSplitter*     splitter_ = nullptr;
     QTabBar*       tabBar_ = nullptr;
     QTabWidget*    sideTabs_ = nullptr;
-    ThumbnailStrip* thumbs_ = nullptr;
+    QTreeWidget*   bookmarkTree_ = nullptr;
+    QLabel*        bookmarkEmpty_ = nullptr;
+    QAction*       addBookmarkAction_ = nullptr;
+    QAction*       renameBookmarkAction_ = nullptr;
+    QAction*       removeBookmarkAction_ = nullptr;
+    QLineEdit*     pageEdit_ = nullptr;
+    QLabel*        pageCountLabel_ = nullptr;
+    QComboBox*     zoomBox_ = nullptr;
+    QAction*       continuousAction_ = nullptr;
+    QAction*       fitWidthAction_ = nullptr;
+    QAction*       fitPageAction_ = nullptr;
     QAction*       copyAction_ = nullptr;
     QAction*       invertAction_ = nullptr;
     QAction*       lcdAction_ = nullptr;

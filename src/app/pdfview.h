@@ -62,6 +62,8 @@ public:
     int    pageCount() const { return pageCount_; }
     double zoom() const { return zoom_; }
     bool   hasImage() const { return !cache_.empty(); }
+    QImage cachedPageImage(int page) const;
+    qint64 cachedBytes() const;
 
     // Page size in points at 1:1 zoom.
     QSizeF pageSizePoints(int pageIndex) const;
@@ -132,12 +134,15 @@ public slots:
     void goToLastPage();
 
 signals:
+    void openRequested();
+    void configurationChanged();
     void pageChanged(int page);
     void zoomChanged(double zoom);
     void selectionChanged(bool hasSelection);
     void findMatchChanged(int index, int total);
 
 protected:
+    bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void scrollContentsBy(int dx, int dy) override;
@@ -167,8 +172,13 @@ private:
     int  pageTop(int pageIndex) const;
     // Read every page's size from PDFium once. Called when a document is bound.
     void loadPageSizes();
-    const QImage* imageFor(int pageIndex);   // renders on demand
-    void trimCache();
+    struct CachedPage {
+        QImage image;
+        QRect region;       // physical pixels within the full page
+        QSize fullSize;
+    };
+    const CachedPage* imageFor(int pageIndex);
+    void trimCache(int protectedPage);
     void invalidateAll();
     void syncCurrentPage();
 
@@ -203,8 +213,9 @@ private:
     int totalHeight_ = 0;
     int margin_ = 12;        // gap between pages and around the strip
 
-    // Rendered pages, bounded in count.
-    std::map<int, QImage> cache_;
+    // Bounded by bytes as well as count. Large pages cache the visible region.
+    std::map<int, CachedPage> cache_;
+    double cacheDpr_ = 0;
     pre::RenderedPage     buffer_;   // scratch for the renderer
     FitMode               fitMode_ = FitMode::Width;
     ViewMode              viewMode_ = ViewMode::Continuous;
@@ -223,6 +234,7 @@ private:
     // visible pages, which made dragging a window edge visibly stutter.
     bool    deferRerender_ = false;
     QTimer* rerenderTimer_ = nullptr;
+    QWidget* welcome_ = nullptr;
 
     pre::PageIndex* index_ = nullptr;   // text data; not owned
     TextPos         anchor_;

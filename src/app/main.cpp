@@ -18,6 +18,7 @@
 
 #include "doc.h"
 #include "render.h"
+#include "tocworker.h"
 
 namespace {
 
@@ -40,7 +41,7 @@ void PrepareTestOutput() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("PDF Reader"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1"));
+    QApplication::setApplicationVersion(QStringLiteral("0.2.0"));
 
     // Same artwork as the .ico in the PE resource table. Windows draws the
     // taskbar button from the executable's icon, but the title bar, the
@@ -143,7 +144,7 @@ int main(int argc, char** argv) {
 
     QCommandLineOption sideOpt(
         QStringLiteral("side"),
-        QStringLiteral("Select the sidebar page after opening: toc | thumbs."),
+        QStringLiteral("Select the sidebar page after opening: toc | bookmarks."),
         QStringLiteral("which"));
     parser.addOption(sideOpt);
     QCommandLineOption invertOpt(QStringLiteral("invert"),
@@ -182,8 +183,16 @@ int main(int argc, char** argv) {
                                                "(default 2.0)."),
                                 QStringLiteral("x"));
     parser.addOption(scaleOpt);
+    QCommandLineOption tocWorkerOpt(QStringLiteral("toc-worker"),
+        QStringLiteral("Generate the automatic TOC in an isolated worker process."),
+        QStringLiteral("file"));
+    parser.addOption(tocWorkerOpt);
     parser.process(app);
 
+    if (parser.isSet(tocWorkerOpt)) {
+        PrepareTestOutput();
+        return app::RunTocWorker(parser.value(tocWorkerOpt));
+    }
     MainWindow window;
 
     // Pure PDFium render, bypassing the view entirely: this is what the page
@@ -200,7 +209,7 @@ int main(int argc, char** argv) {
         pre::Library  lib;
         pre::Document doc;
         std::string   err;
-        if (!doc.Open(src.toLocal8Bit().constData(), &err)) {
+        if (!doc.Open(src.toUtf8().constData(), &err)) {
             std::printf("RENDER FAIL: %s\n", err.c_str());
             return 1;
         }
@@ -284,6 +293,7 @@ int main(int argc, char** argv) {
                                                                   Qt::SkipEmptyParts);
         QTimer::singleShot(400, &app, [&] {
             for (const QString& f : files) window.openDocument(f);
+            window.waitForTocs();
 
             QStringList out;
             bool ok = true;
@@ -448,7 +458,7 @@ int main(int argc, char** argv) {
         const QString which = parser.value(sideOpt);
         const bool    inv   = parser.isSet(invertOpt);
         QTimer::singleShot(800, &app, [&window, which, inv] {
-            if (!which.isEmpty()) window.showSidebarPage(which.startsWith(QLatin1Char('t')) ? 1 : 0);
+            if (!which.isEmpty()) window.showSidebarPage(which == QLatin1String("bookmarks") ? 1 : 0);
             if (inv) window.toggleInvert();
         });
     }

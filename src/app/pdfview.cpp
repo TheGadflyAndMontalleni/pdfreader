@@ -8,6 +8,10 @@
 #include <QTimer>
 #include <QScrollBar>
 #include <QWheelEvent>
+#include <QLabel>
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +25,8 @@ namespace {
 // down never re-renders, small enough that memory stays bounded even at high
 // zoom (a page at 400% is tens of megabytes).
 constexpr int kMaxCachedPages = 10;
+constexpr qint64 kCacheBytes = 128 * 1024 * 1024;
+constexpr qint64 kFullPageBytes = 32 * 1024 * 1024;
 
 constexpr double kMinZoom = 0.10;
 constexpr double kMaxZoom = 8.0;
@@ -36,6 +42,25 @@ PdfView::PdfView(QWidget* parent) : QAbstractScrollArea(parent) {
     viewport()->setAutoFillBackground(false);
     verticalScrollBar()->setSingleStep(40);
     horizontalScrollBar()->setSingleStep(40);
+    welcome_ = new QWidget(viewport());
+    welcome_->setObjectName("welcome");
+    auto* welcomeLayout = new QVBoxLayout(welcome_);
+    welcomeLayout->addStretch();
+    auto* title = new QLabel(tr("PDF Reader"), welcome_);
+    QFont titleFont = title->font();
+    titleFont.setPointSize(24);
+    titleFont.setWeight(QFont::DemiBold);
+    title->setFont(titleFont);
+    title->setStyleSheet("color: #eeeeee;");
+    welcomeLayout->addWidget(title, 0, Qt::AlignHCenter);
+    auto* subtitle = new QLabel(tr("打开文档，开始阅读"), welcome_);
+    subtitle->setStyleSheet("color: #bbbbbb; padding: 8px;");
+    welcomeLayout->addWidget(subtitle, 0, Qt::AlignHCenter);
+    auto* open = new QPushButton(tr("打开 PDF 文件…"), welcome_);
+    open->setMinimumSize(180, 40);
+    welcomeLayout->addWidget(open, 0, Qt::AlignHCenter);
+    connect(open, &QPushButton::clicked, this, &PdfView::openRequested);
+    welcomeLayout->addStretch();
 
     // One deferred re-render after a burst of resize events.
     rerenderTimer_ = new QTimer(this);
@@ -54,6 +79,7 @@ PdfView::PdfView(QWidget* parent) : QAbstractScrollArea(parent) {
 // ---------------------------------------------------------------------------
 
 void PdfView::setDocument(FPDF_DOCUMENT doc, int pageCount, pre::PageIndex* index) {
+    welcome_->hide();
     doc_ = doc;
     pageCount_ = pageCount;
     index_ = index;
@@ -70,6 +96,7 @@ void PdfView::setDocument(FPDF_DOCUMENT doc, int pageCount, pre::PageIndex* inde
 }
 
 void PdfView::clearDocument() {
+    welcome_->show();
     doc_ = nullptr;
     index_ = nullptr;
     pageCount_ = 0;
@@ -180,7 +207,9 @@ int PdfView::pageAtY(int y) const {
 void PdfView::syncCurrentPage() {
     if (geom_.empty()) return;
     if (viewMode_ == ViewMode::SinglePage) return;   // set by setPage()
-    const int p = pageAtY(verticalScrollBar()->value() + margin_ / 2);
+    // setPage() leaves a full margin above the requested page. Sampling only
+    // half that gap would report the previous page after a deferred resize.
+    const int p = pageAtY(verticalScrollBar()->value() + margin_);
     if (p != currentPage_) {
         currentPage_ = p;
         emit pageChanged(currentPage_);
@@ -191,12 +220,50 @@ void PdfView::syncCurrentPage() {
 // rendering
 // ---------------------------------------------------------------------------
 
-const QImage* PdfView::imageFor(int pageIndex) {
-    auto it = cache_.find(pageIndex);
-    if (it != cache_.end()) return &it->second;
-    if (!doc_ || pageIndex < 0 || pageIndex >= pageCount_) return nullptr;
+QImage PdfView::cachedPageImage(int page) const {
+    const auto it = cache_.find(page);
+    return it == cache_.end() ? QImage() : it->second.image;
+}
 
-    if (!pre::RenderPage(doc_, pageIndex, zoom_, &buffer_)) return nullptr;
+qint64 PdfView::cachedBytes() const {
+    qint64 bytes = 0;
+    for (const auto& entry : cache_) bytes += entry.second.image.sizeInBytes();
+    return bytes;
+}
+
+const PdfView::CachedPage* PdfView::imageFor(int pageIndex) {
+    if (!doc_ || pageIndex < 0 || pageIndex >= pageCount_) return nullptr;
+    const double dpr = viewport()->devicePixelRatioF();
+    if (!qFuzzyCompare(cacheDpr_, dpr)) {
+        invalidateAll();
+        cacheDpr_ = dpr;
+    }
+    const PageGeom& g = geom_[static_cast<size_t>(pageIndex)];
+    const QSize full(std::max(1, qRound(g.width * dpr)),
+                     std::max(1, qRound(g.height * dpr)));
+    const QRect pageRect(pageLeft(pageIndex), pageTop(pageIndex), g.width, g.height);
+    const QRect visible = pageRect.intersected(QRect(horizontalScrollBar()->value(),
+        verticalScrollBar()->value(), viewportWidth(), viewportHeight()))
+        .translated(-pageRect.topLeft());
+    const QRect needed(qFloor(visible.x() * dpr), qFloor(visible.y() * dpr),
+                       qCeil(visible.width() * dpr), qCeil(visible.height() * dpr));
+    auto it = cache_.find(pageIndex);
+    if (it != cache_.end()) {
+        if ((it->second.fullSize == full && it->second.region.contains(needed)) ||
+            (rerenderTimer_->isActive() && it->second.fullSize != full)) return &it->second;
+        cache_.erase(it);
+    }
+    QRect region(QPoint(0, 0), full);
+    if (static_cast<qint64>(full.width()) * full.height() * 4 > kFullPageBytes) {
+        constexpr int tile = 256;
+        const int x = std::max(0, (needed.x() / tile - 1) * tile);
+        const int y = std::max(0, (needed.y() / tile - 1) * tile);
+        const int right = std::min(full.width(), ((needed.x() + needed.width()) / tile + 2) * tile);
+        const int bottom = std::min(full.height(), ((needed.y() + needed.height()) / tile + 2) * tile);
+        region = QRect(x, y, right - x, bottom - y);
+    }
+    if (!pre::RenderPageRegion(doc_, pageIndex, full.width(), full.height(),
+            region.x(), region.y(), region.width(), region.height(), &buffer_)) return nullptr;
 
     // PDFium writes BGRx, whose byte order matches Format_RGB32 on
     // little-endian hosts. RGB32 has no alpha channel, so drawImage() takes the
@@ -206,8 +273,9 @@ const QImage* PdfView::imageFor(int pageIndex) {
                         buffer_.stride, QImage::Format_RGB32)
                      .copy();
     if (invert_) img.invertPixels(QImage::InvertRgb);
-    auto inserted = cache_.emplace(pageIndex, std::move(img));
-    trimCache();
+    img.setDevicePixelRatio(dpr);
+    auto inserted = cache_.emplace(pageIndex, CachedPage{std::move(img), region, full});
+    trimCache(pageIndex);
     return &inserted.first->second;
 }
 
@@ -219,12 +287,14 @@ void PdfView::setInvertColors(bool on) {
     viewport()->update();
 }
 
-void PdfView::trimCache() {
-    while (static_cast<int>(cache_.size()) > kMaxCachedPages) {
+void PdfView::trimCache(int protectedPage) {
+    while (cache_.size() > 1 && (static_cast<int>(cache_.size()) > kMaxCachedPages ||
+                               cachedBytes() > kCacheBytes)) {
         // Evict the cached page furthest from the one being read.
         auto worst = cache_.begin();
         int  worstDist = -1;
         for (auto it = cache_.begin(); it != cache_.end(); ++it) {
+            if (it->first == protectedPage) continue;
             const int dist = std::abs(it->first - currentPage_);
             if (dist > worstDist) {
                 worstDist = dist;
@@ -245,6 +315,7 @@ void PdfView::paintEvent(QPaintEvent*) {
     painter.fillRect(viewport()->rect(), QColor(0x3a, 0x3a, 0x3a));
 
     if (!doc_ || geom_.empty()) {
+        if (!doc_) return; // the welcome panel owns the empty-state controls
         painter.setPen(QColor(0xcc, 0xcc, 0xcc));
         painter.drawText(viewport()->rect(), Qt::AlignCenter,
                          doc_ ? tr("正在渲染…") : tr("未打开文档"));
@@ -264,19 +335,17 @@ void PdfView::paintEvent(QPaintEvent*) {
         if (ptop > bottom) break;                      // below the viewport
         if (ptop + g.height < top) continue;           // above the viewport
 
-        const QImage* img = imageFor(i);
+        const CachedPage* cached = imageFor(i);
         const int x = margin_ + std::max(0, (viewportWidth() - 2 * margin_ - g.width) / 2);
-        if (img && !img->isNull()) {
-            if (img->width() == g.width && img->height() == g.height) {
-                // Steady state: draw at 1:1. This is a straight blit, and any
-                // resampling path here would soften every glyph on screen.
-                painter.drawImage(QPoint(x - left, ptop - top), *img);
-            } else {
-                // Only during a resize, where the raster still belongs to the
-                // previous zoom; scale it into place until the deferred
-                // re-render replaces it.
-                painter.drawImage(QRect(x - left, ptop - top, g.width, g.height), *img);
-            }
+        if (cached && !cached->image.isNull()) {
+            const double sx = g.width / double(cached->fullSize.width());
+            const double sy = g.height / double(cached->fullSize.height());
+            const QRectF target(x - left + cached->region.x() * sx,
+                ptop - top + cached->region.y() * sy,
+                cached->region.width() * sx, cached->region.height() * sy);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, rerenderTimer_->isActive());
+            painter.drawImage(target, cached->image,
+                              QRectF(cached->image.rect()));
         } else {
             painter.fillRect(QRect(x - left, ptop - top, g.width, g.height),
                              QColor(0xff, 0xff, 0xff));
@@ -408,7 +477,9 @@ void PdfView::zoomIn()  { fitMode_ = FitMode::None; setZoom(zoom_ * 1.25); }
 void PdfView::zoomOut() { fitMode_ = FitMode::None; setZoom(zoom_ / 1.25); }
 
 void PdfView::fitWidth() {
+    const bool changed = fitMode_ != FitMode::Width;
     fitMode_ = FitMode::Width;
+    if (changed) emit configurationChanged();
     if (!doc_ || pageCount_ <= 0) return;
     // Fit the widest page so no page ever needs horizontal scrolling.
     double widest = 0;
@@ -423,7 +494,9 @@ void PdfView::fitWidth() {
 }
 
 void PdfView::fitPage() {
+    const bool changed = fitMode_ != FitMode::Page;
     fitMode_ = FitMode::Page;
+    if (changed) emit configurationChanged();
     if (!doc_ || pageCount_ <= 0) return;
     // Fit the whole page: both dimensions must be satisfied, so the smaller of
     // the two scales wins. Uses the largest page so nothing is ever cropped.
@@ -449,12 +522,14 @@ void PdfView::setFitMode(FitMode mode) {
         fitPage();
     } else {
         fitMode_ = FitMode::None;
+        emit configurationChanged();
     }
 }
 
 void PdfView::setViewMode(ViewMode mode) {
     if (mode == viewMode_) return;
     viewMode_ = mode;
+    emit configurationChanged();
     if (viewMode_ == ViewMode::SinglePage) {
         verticalScrollBar()->setValue(0);
         horizontalScrollBar()->setValue(0);
@@ -800,8 +875,17 @@ QString PdfView::matchText(int index) {
 
 
 
+bool PdfView::event(QEvent* event) {
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        invalidateAll();
+        viewport()->update();
+    }
+    return QAbstractScrollArea::event(event);
+}
+
 void PdfView::resizeEvent(QResizeEvent* event) {
     QAbstractScrollArea::resizeEvent(event);
+    welcome_->setGeometry(viewport()->rect());
     // The viewport is final here, unlike in the owning window's resizeEvent,
     // so this is the only place a fit zoom can be computed safely.
     if (doc_ && pageCount_ > 0 && fitMode_ != FitMode::None) {

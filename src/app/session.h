@@ -9,8 +9,14 @@
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 namespace app {
+
+struct Bookmark {
+    int page = 0;
+    QString title;
+};
 
 struct DocState {
     int    page     = 0;
@@ -30,6 +36,8 @@ public:
 
     static DocState LoadDocState(const QString& path);
     static void     SaveDocState(const QString& path, const DocState& state);
+    static QVector<Bookmark> LoadBookmarks(const QString& path);
+    static void SaveBookmarks(const QString& path, const QVector<Bookmark>& bookmarks);
 
     static QStringList RecentFiles();
     static void        AddRecentFile(const QString& path, int maxEntries = 12);
@@ -49,6 +57,8 @@ public:
 
     static QByteArray WindowGeometry();
     static void       SetWindowGeometry(const QByteArray& geometry);
+    static QByteArray SidebarState();
+    static void SetSidebarState(const QByteArray& state);
 
     // Force the INI to disk. QSettings buffers, so a test that writes and then
     // inspects the file needs this.

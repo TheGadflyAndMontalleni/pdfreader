@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <limits>
 
 #include "fpdf_text.h"
@@ -37,7 +38,7 @@ bool Document::Open(const std::string& path, std::string* errorOut) {
     // path-based loader takes a narrow string and mishandles non-ASCII paths on
     // Windows, which matters here because the target documents routinely have
     // Chinese filenames.
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
     if (in) {
         in.seekg(0, std::ios::end);
         const std::streamoff size = in.tellg();

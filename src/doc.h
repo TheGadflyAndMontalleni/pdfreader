@@ -21,10 +21,8 @@ public:
 
 // Owns an FPDF_DOCUMENT.
 //
-// Opens by path first. If PDFium refuses, it reads the bytes ourselves and
-// retries with FPDF_LoadMemDocument: the memory loader accepts some files the
-// path loader rejects, and it also lets us analyse files whose handle is
-// otherwise busy.
+// Opens a UTF-8 path through std::filesystem and keeps the loaded bytes alive
+// for PDFium. The narrow PDFium path loader is a fallback for readable paths.
 class Document {
 public:
     Document() = default;

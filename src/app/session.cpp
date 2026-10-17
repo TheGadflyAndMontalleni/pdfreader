@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
+#include <algorithm>
 
 namespace app {
 
@@ -101,6 +102,35 @@ QStringList Session::RecentFiles() {
     return live;
 }
 
+QVector<Bookmark> Session::LoadBookmarks(const QString& path) {
+    QSettings s(SettingsPath(), QSettings::IniFormat);
+    QVector<Bookmark> bookmarks;
+    const int count = std::min(10000, s.beginReadArray(KeyFor(path) + "/bookmarks"));
+    for (int i = 0; i < count; ++i) {
+        s.setArrayIndex(i);
+        const int page = s.value("page", -1).toInt();
+        const QString title = s.value("title").toString().trimmed();
+        if (page >= 0 && !title.isEmpty()) bookmarks.push_back({page, title});
+    }
+    s.endArray();
+    return bookmarks;
+}
+
+void Session::SaveBookmarks(const QString& path, const QVector<Bookmark>& bookmarks) {
+    if (path.isEmpty()) return;
+    QSettings s(SettingsPath(), QSettings::IniFormat);
+    const QString key = KeyFor(path) + "/bookmarks";
+    s.remove(key);
+    s.beginWriteArray(key, bookmarks.size());
+    for (int i = 0; i < bookmarks.size(); ++i) {
+        s.setArrayIndex(i);
+        s.setValue("page", bookmarks[i].page);
+        s.setValue("title", bookmarks[i].title);
+    }
+    s.endArray();
+    s.sync();
+}
+
 void Session::AddRecentFile(const QString& path, int maxEntries) {
     if (path.isEmpty()) return;
     const QString norm = NormalizePath(path);
@@ -179,6 +209,17 @@ QByteArray Session::WindowGeometry() {
 void Session::SetWindowGeometry(const QByteArray& geometry) {
     QSettings s(SettingsPath(), QSettings::IniFormat);
     s.setValue(kGeometry, geometry);
+    s.sync();
+}
+
+QByteArray Session::SidebarState() {
+    QSettings s(SettingsPath(), QSettings::IniFormat);
+    return s.value("window/sidebar").toByteArray();
+}
+
+void Session::SetSidebarState(const QByteArray& state) {
+    QSettings s(SettingsPath(), QSettings::IniFormat);
+    s.setValue("window/sidebar", state);
     s.sync();
 }
 

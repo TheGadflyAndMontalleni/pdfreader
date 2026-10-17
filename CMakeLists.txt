@@ -56,14 +56,18 @@ target_link_libraries(toc_build PRIVATE pdfcore)
 # Alt-Tab and the "Open with" dialog all read it from there). app.qrc gives Qt
 # the same image for the title bar. Both are generated from one PNG by
 # tools/make_icon.ps1.
-add_executable(pdfreader WIN32
-    src/app/main.cpp
+add_library(reader_ui STATIC
     src/app/mainwindow.cpp
     src/app/pdfview.cpp
     src/app/printing.cpp
     src/app/session.cpp
-    src/app/thumbnails.cpp
-    src/app/app.rc
-    src/app/app.qrc
+    src/app/tocworker.cpp
 )
-target_link_libraries(pdfreader PRIVATE pdfcore Qt6::Widgets Qt6::PrintSupport)
+target_include_directories(reader_ui PUBLIC "${CMAKE_SOURCE_DIR}/src/app")
+target_link_libraries(reader_ui PUBLIC pdfcore Qt6::Widgets Qt6::PrintSupport)
+
+add_executable(pdfreader WIN32 src/app/main.cpp src/app/app.rc src/app/app.qrc)
+target_link_libraries(pdfreader PRIVATE reader_ui)
+
+add_executable(reader_regressions tests/reader_regressions.cpp)
+target_link_libraries(reader_regressions PRIVATE reader_ui)

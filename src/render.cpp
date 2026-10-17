@@ -27,11 +27,10 @@ bool LcdText() { return g_lcdText; }
 
 bool PageSize(FPDF_DOCUMENT doc, int pageIndex, double* width, double* height) {
     if (!doc) return false;
-    FPDF_PAGE page = FPDF_LoadPage(doc, pageIndex);
-    if (!page) return false;
-    if (width)  *width  = FPDF_GetPageWidthF(page);
-    if (height) *height = FPDF_GetPageHeightF(page);
-    FPDF_ClosePage(page);
+    FS_SIZEF size{};
+    if (!FPDF_GetPageSizeByIndexF(doc, pageIndex, &size)) return false;
+    if (width)  *width = size.width;
+    if (height) *height = size.height;
     return true;
 }
 
@@ -39,17 +38,24 @@ bool RenderPage(FPDF_DOCUMENT doc, int pageIndex, double scale, RenderedPage* ou
     if (!doc || !out) return false;
     if (scale <= 0.0) scale = 1.0;
 
-    FPDF_PAGE page = FPDF_LoadPage(doc, pageIndex);
-    if (!page) return false;
-
-    const double ptW = FPDF_GetPageWidthF(page);
-    const double ptH = FPDF_GetPageHeightF(page);
+    double ptW = 0, ptH = 0;
+    if (!PageSize(doc, pageIndex, &ptW, &ptH) || !std::isfinite(scale)) return false;
 
     int pw = static_cast<int>(std::lround(ptW * scale));
     int ph = static_cast<int>(std::lround(ptH * scale));
     pw = std::max(1, std::min(pw, 20000));
     ph = std::max(1, std::min(ph, 20000));
 
+    return RenderPageRegion(doc, pageIndex, pw, ph, 0, 0, pw, ph, out);
+}
+
+bool RenderPageRegion(FPDF_DOCUMENT doc, int pageIndex, int pageWidth, int pageHeight,
+                      int x, int y, int pw, int ph, RenderedPage* out) {
+    if (!doc || !out || pageWidth <= 0 || pageHeight <= 0 || x < 0 || y < 0 ||
+        pw <= 0 || ph <= 0 || x > pageWidth - pw || y > pageHeight - ph ||
+        static_cast<int64_t>(pw) * ph > 64 * 1024 * 1024) return false;
+    FPDF_PAGE page = FPDF_LoadPage(doc, pageIndex);
+    if (!page) return false;
     const int stride = pw * 4;
     out->width  = pw;
     out->height = ph;
@@ -73,7 +79,7 @@ bool RenderPage(FPDF_DOCUMENT doc, int pageIndex, double scale, RenderedPage* ou
     // antialiasing, which is switchable (see SetLcdText).
     int flags = FPDF_ANNOT;
     if (g_lcdText) flags |= FPDF_LCD_TEXT;
-    FPDF_RenderPageBitmap(bitmap, page, 0, 0, pw, ph, 0, flags);
+    FPDF_RenderPageBitmap(bitmap, page, -x, -y, pageWidth, pageHeight, 0, flags);
 
     FPDFBitmap_Destroy(bitmap);
     FPDF_ClosePage(page);

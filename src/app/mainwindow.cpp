@@ -36,9 +36,17 @@
 #include "printing.h"
 #include "render.h"
 #include "session.h"
-#include "thumbnails.h"
 
 #include <QCloseEvent>
+#include <QComboBox>
+#include <QEventLoop>
+#include <QHeaderView>
+#include <QIntValidator>
+#include <QProcess>
+#include <QSignalBlocker>
+#include <QStyle>
+#include <QTreeWidgetItemIterator>
+#include "tocworker.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,8 +56,9 @@ namespace {
 
 // Page index for a TOC row (-1 when the entry has no resolved target).
 constexpr int kPageRole = Qt::UserRole + 1;
+constexpr int kNodeKeyRole = Qt::UserRole + 2;
 
-QTreeWidgetItem* MakeItem(const pre::TocNode& node) {
+QTreeWidgetItem* MakeItem(const pre::TocNode& node, const QString& key) {
     auto* item = new QTreeWidgetItem();
     QString title = QString::fromUtf8(node.title.c_str());
     if (node.targetPage < 0) {
@@ -60,11 +69,12 @@ QTreeWidgetItem* MakeItem(const pre::TocNode& node) {
         item->setText(1, QString::number(node.targetPage + 1));
     }
     item->setData(0, kPageRole, node.targetPage);
-    item->setToolTip(0, QObject::tr("来源: %1   置信度: %2")
+    item->setData(0, kNodeKeyRole, key);
+    item->setToolTip(0, title + "\n" + QObject::tr("来源: %1   置信度: %2")
                             .arg(QString::fromUtf8(pre::TocSourceName(node.source)))
                             .arg(node.confidence, 0, 'f', 2));
-    for (const auto& child : node.children) {
-        item->addChild(MakeItem(child));
+    for (size_t i = 0; i < node.children.size(); ++i) {
+        item->addChild(MakeItem(node.children[i], key + "/" + QString::number(i)));
     }
     return item;
 }
@@ -75,14 +85,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     buildUi();
     const QByteArray geo = app::Session::WindowGeometry();
     if (!geo.isEmpty()) restoreGeometry(geo);
+    const QByteArray sidebar = app::Session::SidebarState();
+    if (!sidebar.isEmpty()) splitter_->restoreState(sidebar);
     updateStatus();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    closing_ = true;
+    for (auto& entry : tabs_) stopToc(entry.get());
+}
 
 void MainWindow::buildUi() {
     setWindowTitle(tr("PDF Reader"));
     resize(1280, 860);
+    setStyleSheet(QStringLiteral(
+        "QToolBar { spacing: 5px; padding: 6px; border: none; }"
+        "QToolButton { padding: 6px 9px; border-radius: 5px; }"
+        "QToolButton:hover { background: palette(midlight); }"
+        "QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); }"
+        "QTabBar::tab { padding: 7px 13px; }"
+        "QTreeView { border: none; outline: none; }"
+        "QTreeView::item { padding: 5px 2px; }"
+        "QLineEdit, QComboBox { padding: 4px 6px; }"
+        "QStatusBar { padding: 3px; }"));
 
     // ---- menus ----
     QMenu* fileMenu = menuBar()->addMenu(tr("文件(&F)"));
@@ -115,10 +140,12 @@ void MainWindow::buildUi() {
     QMenu* viewMenu = menuBar()->addMenu(tr("视图(&V)"));
     viewMenu->addAction(tr("放大"), QKeySequence::ZoomIn, this, [this] { applyZoom(1.25); });
     viewMenu->addAction(tr("缩小"), QKeySequence::ZoomOut, this, [this] { applyZoom(1 / 1.25); });
-    viewMenu->addAction(tr("适应宽度"), QKeySequence(Qt::CTRL | Qt::Key_0), this,
+    fitWidthAction_ = viewMenu->addAction(tr("适应宽度"), QKeySequence(Qt::CTRL | Qt::Key_0), this,
                         &MainWindow::fitWidth);
-    viewMenu->addAction(tr("适应页面"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
+    fitPageAction_ = viewMenu->addAction(tr("适应页面"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
                         [this] { if (view_) view_->setFitMode(PdfView::FitMode::Page); });
+    fitWidthAction_->setCheckable(true);
+    fitPageAction_->setCheckable(true);
     viewMenu->addSeparator();
     viewMenu->addAction(tr("连续视图"), QKeySequence(Qt::Key_C), this, [this] {
         if (view_) view_->setViewMode(PdfView::ViewMode::Continuous);
@@ -168,28 +195,74 @@ void MainWindow::buildUi() {
     editMenu->addAction(tr("查找上一个"), QKeySequence(Qt::SHIFT | Qt::Key_F3), this,
                         &MainWindow::findPrev);
 
+    QMenu* bookmarksMenu = menuBar()->addMenu(tr("书签(&B)"));
+    addBookmarkAction_ = bookmarksMenu->addAction(tr("添加书签"),
+        QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { addBookmark(); });
+    addBookmarkAction_->setObjectName("addBookmark");
+    bookmarksMenu->addAction(tr("显示书签"), this, [this] { showSidebarPage(1); });
+
     // ---- toolbar ----
-    QToolBar* bar = addToolBar(tr("工具栏"));
+    QToolBar* bar = addToolBar(tr("阅读工具"));
     bar->setMovable(false);
-    bar->addAction(tr("打开"), this, &MainWindow::onOpen);
+    bar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    bar->setIconSize(QSize(18, 18));
+    bar->addAction(style()->standardIcon(QStyle::SP_DialogOpenButton), tr("打开"),
+                   this, &MainWindow::onOpen);
     bar->addSeparator();
-    QAction* prevAct = bar->addAction(tr("上一页"), this, &MainWindow::onPrevPage);
-    QAction* nextAct = bar->addAction(tr("下一页"), this, &MainWindow::onNextPage);
+    auto* prevAct = bar->addAction(style()->standardIcon(QStyle::SP_ArrowBack),
+                                   tr("上一页"), this, &MainWindow::onPrevPage);
+    auto* nextAct = bar->addAction(style()->standardIcon(QStyle::SP_ArrowForward),
+                                   tr("下一页"), this, &MainWindow::onNextPage);
     prevAct->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Left));
     nextAct->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Right));
+    pageEdit_ = new QLineEdit(bar);
+    pageEdit_->setObjectName("pageNumber");
+    pageEdit_->setFixedWidth(58);
+    pageEdit_->setAlignment(Qt::AlignCenter);
+    pageEdit_->setValidator(new QIntValidator(1, 10000000, pageEdit_));
+    pageEdit_->setToolTip(tr("输入页码并按回车跳转"));
+    bar->addWidget(pageEdit_);
+    pageCountLabel_ = new QLabel(bar);
+    pageCountLabel_->setMinimumWidth(44);
+    bar->addWidget(pageCountLabel_);
+    connect(pageEdit_, &QLineEdit::returnPressed, this, [this] {
+        if (document_) view_->setPage(pageEdit_->text().toInt() - 1);
+        updateStatus();
+        view_->setFocus();
+    });
     bar->addSeparator();
-    bar->addAction(tr("放大"), this, [this] { applyZoom(1.25); });
-    bar->addAction(tr("缩小"), this, [this] { applyZoom(1 / 1.25); });
-    bar->addAction(tr("适应宽度"), this, &MainWindow::fitWidth);
-    bar->addAction(tr("适应页面"), this, [this] {
-        if (view_) view_->setFitMode(PdfView::FitMode::Page);
+    bar->addAction(tr("−"), this, [this] { applyZoom(1 / 1.25); })->setToolTip(tr("缩小"));
+    zoomBox_ = new QComboBox(bar);
+    zoomBox_->setObjectName("zoomLevel");
+    zoomBox_->setEditable(true);
+    zoomBox_->setFixedWidth(92);
+    zoomBox_->addItems({"50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%"});
+    bar->addWidget(zoomBox_);
+    auto applyEnteredZoom = [this] {
+        QString text = zoomBox_->currentText();
+        text.remove('%');
+        bool valid = false;
+        const double zoom = text.toDouble(&valid) / 100.0;
+        if (document_ && valid && zoom >= 0.1 && zoom <= 8.0) {
+            view_->setFitMode(PdfView::FitMode::None);
+            view_->setZoom(zoom);
+        }
+        updateStatus();
+    };
+    connect(zoomBox_, &QComboBox::activated, this, [applyEnteredZoom](int) { applyEnteredZoom(); });
+    connect(zoomBox_->lineEdit(), &QLineEdit::returnPressed, this, applyEnteredZoom);
+    bar->addAction(tr("+"), this, [this] { applyZoom(1.25); })->setToolTip(tr("放大"));
+    bar->addAction(fitWidthAction_);
+    bar->addAction(fitPageAction_);
+    bar->addSeparator();
+    continuousAction_ = bar->addAction(tr("连续阅读"), this, [this](bool checked) {
+        view_->setViewMode(checked ? PdfView::ViewMode::Continuous : PdfView::ViewMode::SinglePage);
+        updateStatus();
     });
-    bar->addAction(tr("单页/连续"), this, [this] {
-        if (!view_) return;
-        view_->setViewMode(view_->viewMode() == PdfView::ViewMode::Continuous
-                               ? PdfView::ViewMode::SinglePage
-                               : PdfView::ViewMode::Continuous);
-    });
+    continuousAction_->setCheckable(true);
+    continuousAction_->setObjectName("continuousView");
+    bar->addAction(tr("查找"), this, &MainWindow::showFindBar);
+    bar->addAction(addBookmarkAction_);
 
     // ---- find bar (hidden until Ctrl+F) ----
     addToolBarBreak();
@@ -223,37 +296,69 @@ void MainWindow::buildUi() {
     connect(findEdit_, &QLineEdit::returnPressed, this, &MainWindow::findNext);
     connect(findCase_, &QCheckBox::toggled, this, [this](bool) { runFind(); });
 
-    // ---- sidebar ----
-    // Two ways into the document: the reconstructed table of contents, and
-    // page thumbnails.
-    auto* sidebar    = new QWidget(this);
+    // ---- sidebar: automatic TOC and personal bookmarks ----
+    auto* sidebar = new QWidget(this);
     auto* sideLayout = new QVBoxLayout(sidebar);
     sideLayout->setContentsMargins(0, 0, 0, 0);
-    sideLayout->setSpacing(0);
-
-    auto* tocPage   = new QWidget(sidebar);
+    auto* tocPage = new QWidget(sidebar);
     auto* tocLayout = new QVBoxLayout(tocPage);
-    tocLayout->setContentsMargins(6, 6, 6, 6);
-    tocLayout->setSpacing(4);
-
+    tocLayout->setContentsMargins(10, 8, 10, 6);
     tocStatus_ = new QLabel(tocPage);
-    tocStatus_->setWordWrap(true);
     tocLayout->addWidget(tocStatus_);
-
+    auto* tocTools = new QToolBar(tocPage);
+    tocTools->setIconSize(QSize(16, 16));
     tocTree_ = new QTreeWidget(tocPage);
+    tocTree_->setObjectName("tableOfContents");
     tocTree_->setColumnCount(2);
-    tocTree_->setHeaderLabels({tr("标题"), tr("页")});
-    tocTree_->setColumnWidth(0, 250);
+    tocTree_->setHeaderLabels({tr("目录"), tr("页码")});
     tocTree_->setUniformRowHeights(true);
-    tocTree_->setAlternatingRowColors(true);
-    connect(tocTree_, &QTreeWidget::itemClicked, this, &MainWindow::onTocItemClicked);
+    tocTree_->setIndentation(16);
+    tocTree_->header()->setStretchLastSection(false);
+    tocTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    tocTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    tocTools->addAction(tr("全部展开"), tocTree_, &QTreeWidget::expandAll)->setObjectName("expandToc");
+    tocTools->addAction(tr("全部收起"), tocTree_, &QTreeWidget::collapseAll)->setObjectName("collapseToc");
+    tocLayout->addWidget(tocTools);
     tocLayout->addWidget(tocTree_, 1);
+    connect(tocTree_, &QTreeWidget::itemClicked, this, &MainWindow::onTocItemClicked);
 
-    thumbs_ = new ThumbnailStrip(sidebar);
-
+    auto* bookmarksPage = new QWidget(sidebar);
+    auto* bookmarkLayout = new QVBoxLayout(bookmarksPage);
+    bookmarkLayout->setContentsMargins(10, 8, 10, 6);
+    auto* bookmarkTools = new QToolBar(bookmarksPage);
+    bookmarkTools->addAction(addBookmarkAction_);
+    renameBookmarkAction_ = bookmarkTools->addAction(tr("重命名"), this, &MainWindow::editSelectedBookmark);
+    removeBookmarkAction_ = bookmarkTools->addAction(tr("删除"), this, [this] {
+        if (bookmarkTree_->currentItem()) removeBookmark(bookmarkTree_->indexOfTopLevelItem(bookmarkTree_->currentItem()));
+    });
+    bookmarkLayout->addWidget(bookmarkTools);
+    bookmarkEmpty_ = new QLabel(tr("还没有书签\n阅读时按 Ctrl+D 保存当前页"), bookmarksPage);
+    bookmarkEmpty_->setAlignment(Qt::AlignCenter);
+    bookmarkEmpty_->setWordWrap(true);
+    bookmarkLayout->addWidget(bookmarkEmpty_);
+    bookmarkTree_ = new QTreeWidget(bookmarksPage);
+    bookmarkTree_->setObjectName("personalBookmarks");
+    bookmarkTree_->setColumnCount(2);
+    bookmarkTree_->setHeaderLabels({tr("书签"), tr("页码")});
+    bookmarkTree_->setRootIsDecorated(false);
+    bookmarkTree_->setUniformRowHeights(true);
+    bookmarkTree_->header()->setStretchLastSection(false);
+    bookmarkTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    bookmarkTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    bookmarkLayout->addWidget(bookmarkTree_, 1);
+    connect(bookmarkTree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item, int) {
+        jumpToBookmark(bookmarkTree_->indexOfTopLevelItem(item));
+    });
+    connect(bookmarkTree_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem*, int) { editSelectedBookmark(); });
+    connect(bookmarkTree_, &QTreeWidget::itemSelectionChanged, this, [this] {
+        const bool selected = bookmarkTree_->currentItem() != nullptr;
+        renameBookmarkAction_->setEnabled(selected);
+        removeBookmarkAction_->setEnabled(selected);
+    });
     sideTabs_ = new QTabWidget(sidebar);
+    sideTabs_->setObjectName("navigationTabs");
     sideTabs_->addTab(tocPage, tr("目录"));
-    sideTabs_->addTab(thumbs_, tr("缩略图"));
+    sideTabs_->addTab(bookmarksPage, tr("书签"));
     sideLayout->addWidget(sideTabs_, 1);
 
     // ---- page view ----
@@ -266,16 +371,25 @@ void MainWindow::buildUi() {
     splitter_->addWidget(view_);
     splitter_->setStretchFactor(0, 0);
     splitter_->setStretchFactor(1, 1);
-    sidebar->setMaximumWidth(420);
+    sidebar->setMinimumWidth(220);
+    sidebar->setMaximumWidth(520);
     splitter_->setSizes({300, 980});
 
     // The tab strip is purely a selector: the content below is a single
     // sidebar + view pair that gets re-bound when the active tab changes.
     tabBar_ = new QTabBar(this);
+    tabBar_->setObjectName("documentTabs");
     tabBar_->setExpanding(false);
     tabBar_->setDrawBase(false);
     tabBar_->setTabsClosable(true);
     tabBar_->setMovable(true);
+    connect(tabBar_, &QTabBar::tabMoved, this, [this](int from, int to) {
+        DocTab* active = cur();
+        auto entry = std::move(tabs_[static_cast<size_t>(from)]);
+        tabs_.erase(tabs_.begin() + from);
+        tabs_.insert(tabs_.begin() + to, std::move(entry));
+        for (int i = 0; i < tabCount(); ++i) if (tab(i) == active) activeTab_ = i;
+    });
     tabBar_->setElideMode(Qt::ElideRight);
     tabBar_->hide();   // no documents yet
     connect(tabBar_, &QTabBar::currentChanged, this, &MainWindow::onTabChanged);
@@ -294,10 +408,9 @@ void MainWindow::buildUi() {
     statusBar()->addPermanentWidget(pageLabel_);
 
     connect(view_, &PdfView::pageChanged, this, &MainWindow::onPageChanged);
+    connect(view_, &PdfView::openRequested, this, &MainWindow::onOpen);
     connect(view_, &PdfView::zoomChanged, this, &MainWindow::onZoomChanged);
-    connect(thumbs_, &ThumbnailStrip::pageRequested, this, [this](int page) {
-        view_->setPage(page);
-    });
+    connect(view_, &PdfView::configurationChanged, this, &MainWindow::updateStatus);
     connect(view_, &PdfView::selectionChanged, this, [this](bool has) {
         if (copyAction_) copyAction_->setEnabled(has);
     });
@@ -312,7 +425,10 @@ void MainWindow::buildUi() {
 
 void MainWindow::setTocStatus(const QString& text, bool warning) {
     tocStatus_->setText(text);
-    tocStatus_->setStyleSheet(warning ? "color:#b06a00;" : "color:#2b7a2b;");
+    QPalette colors = tocStatus_->palette();
+    colors.setColor(QPalette::WindowText, palette().color(warning ? QPalette::Text : QPalette::PlaceholderText));
+    tocStatus_->setPalette(colors);
+    tocStatus_->setToolTip(text);
 }
 
 bool MainWindow::openDocument(const QString& path) {
@@ -338,7 +454,7 @@ bool MainWindow::openDocument(const QString& path) {
     auto entry = std::make_unique<DocTab>();
     entry->doc = std::make_unique<pre::Document>();
     std::string err;
-    const QByteArray local = path.toLocal8Bit();
+    const QByteArray local = path.toUtf8();
     if (!entry->doc->Open(local.constData(), &err)) {
         QApplication::restoreOverrideCursor();
         QMessageBox::critical(this, tr("打开失败"),
@@ -350,10 +466,24 @@ bool MainWindow::openDocument(const QString& path) {
     entry->path  = path;
     entry->index = std::make_unique<pre::PageIndex>(entry->doc->handle());
 
-    // Reconstruct the table of contents. This is the whole point of the
-    // program: documents without /Outlines still get a navigable sidebar.
-    pre::TocOptions opts;
-    entry->toc = pre::BuildAutoToc(*entry->index, opts, &entry->stats);
+    entry->id = ++nextDocumentId_;
+    entry->bookmarks = app::Session::LoadBookmarks(path);
+    entry->bookmarks.erase(std::remove_if(entry->bookmarks.begin(), entry->bookmarks.end(),
+        [&entry](const app::Bookmark& b) { return b.page >= entry->index->PageCount(); }), entry->bookmarks.end());
+    const app::DocState saved = app::Session::LoadDocState(path);
+    if (saved.valid) {
+        entry->page = std::clamp(saved.page, 0, std::max(0, entry->index->PageCount() - 1));
+        entry->zoom = saved.zoom;
+        entry->fitMode = std::clamp(saved.fitMode, 0, 2);
+        entry->viewMode = std::clamp(saved.viewMode, 0, 1);
+        entry->invert = saved.invert;
+    }
+    entry->toc = pre::OutlineToToc(entry->doc->handle());
+    entry->tocCacheKey = app::TocCacheKey(path);
+    if (entry->toc.roots.empty()) {
+        entry->tocPending = !app::LoadTocCache(entry->tocCacheKey, entry->index->PageCount(),
+                                              &entry->toc, &entry->stats);
+    }
 
     tabs_.push_back(std::move(entry));
     const int newIndex = tabCount() - 1;
@@ -373,21 +503,9 @@ bool MainWindow::openDocument(const QString& path) {
 
     activateTab(newIndex);
 
-    // Defer the restore: at this point the splitter has not laid out yet, so
-    // the viewport width is still the pre-show value. Fit first to establish a
-    // sane baseline, then let the document's own saved state override it.
-    const QString opened = path;
-    QTimer::singleShot(0, this, [this, opened] {
-        fitWidth();
-        const app::DocState st = app::Session::LoadDocState(opened);
-        if (!st.valid) return;
-        view_->setViewMode(static_cast<PdfView::ViewMode>(st.viewMode));
-        view_->setFitMode(static_cast<PdfView::FitMode>(st.fitMode));
-        if (st.fitMode == static_cast<int>(PdfView::FitMode::None) && st.zoom > 0.0) {
-            view_->setZoom(st.zoom);
-        }
-        if (st.page > 0 && st.page < view_->pageCount()) view_->setPage(st.page);
-    });
+    // State belongs to this DocTab before it is bound. No queued callback may
+    // accidentally apply another document's saved page to the active view.
+    QTimer::singleShot(0, this, &MainWindow::startNextToc);
 
     updateStatus();
     return true;
@@ -412,14 +530,17 @@ void MainWindow::stashActiveState() {
     t->fitMode  = static_cast<int>(view_->fitMode());
     t->viewMode = static_cast<int>(view_->viewMode());
     t->invert   = view_->invertColors();
+    if (!t->tocPending && !t->toc.roots.empty()) {
+        t->expandedToc.clear();
+        for (QTreeWidgetItemIterator it(tocTree_); *it; ++it)
+            if ((*it)->isExpanded()) t->expandedToc.insert((*it)->data(0, kNodeKeyRole).toString());
+        t->tocStateSaved = true;
+    }
 }
 
 void MainWindow::activateTab(int index) {
     if (index < 0 || index >= tabCount()) return;
-    if (index == activeTab_) {
-        bindTab(index);
-        return;
-    }
+    if (index == activeTab_) return;
     stashActiveState();
 
     activeTab_ = index;
@@ -440,12 +561,12 @@ void MainWindow::bindTab(int index) {
     toc_         = t->toc;
     currentPath_ = t->path;
 
-    populateToc(toc_, t->stats);
+    refreshToc();
+    refreshBookmarks();
     view_->setDocument(document_->handle(), index_->PageCount(), index_);
     view_->setViewMode(static_cast<PdfView::ViewMode>(t->viewMode));
     view_->setFitMode(static_cast<PdfView::FitMode>(t->fitMode));
     view_->setInvertColors(t->invert);
-    thumbs_->setDocument(document_->handle(), index_, index_->PageCount());
     if (t->fitMode == static_cast<int>(PdfView::FitMode::None) && t->zoom > 0.0) {
         view_->setZoom(t->zoom);
     }
@@ -468,45 +589,200 @@ void MainWindow::refreshTabTitle(int index) {
     tabBar_->setTabToolTip(index, t->path);
 }
 
+void MainWindow::stopToc(DocTab* entry) {
+    if (!entry || !entry->tocProcess) return;
+    QProcess* process = entry->tocProcess;
+    entry->tocProcess = nullptr;
+    process->disconnect(this);
+    process->kill();
+    process->deleteLater();
+}
+
+void MainWindow::refreshToc() {
+    const DocTab* entry = cur();
+    if (!entry) { tocTree_->clear(); return; }
+    if (entry->tocPending) {
+        tocTree_->clear();
+        setTocStatus(tr("正在生成目录… 可继续阅读"), false);
+    } else if (entry->tocFailed) {
+        tocTree_->clear();
+        setTocStatus(tr("目录生成失败，可重新打开文档重试"), true);
+    } else {
+        populateToc(entry->toc, entry->stats);
+    }
+}
+
+void MainWindow::startNextToc() {
+    if (closing_) return;
+    for (const auto& entry : tabs_) if (entry->tocProcess) return;
+    DocTab* next = cur();
+    if (!next || !next->tocPending) {
+        next = nullptr;
+        for (const auto& entry : tabs_) if (entry->tocPending) { next = entry.get(); break; }
+    }
+    if (!next) return;
+    auto* worker = new QProcess(this);
+    next->tocProcess = worker;
+    const quint64 id = next->id;
+    connect(worker, &QProcess::finished, this, [this, id, worker](int code, QProcess::ExitStatus) {
+        finishToc(id, worker, code);
+    });
+    connect(worker, &QProcess::errorOccurred, this, [this, id, worker](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) finishToc(id, worker, -1);
+    });
+    auto* deadline = new QTimer(worker);
+    deadline->setSingleShot(true);
+    connect(deadline, &QTimer::timeout, worker, &QProcess::kill);
+    deadline->start(60000);
+    worker->start(QCoreApplication::applicationFilePath(), {"--toc-worker", next->path});
+}
+
+void MainWindow::finishToc(quint64 id, QProcess* worker, int exitCode) {
+    DocTab* entry = nullptr;
+    for (const auto& candidate : tabs_)
+        if (candidate->id == id && candidate->tocProcess == worker) entry = candidate.get();
+    if (!entry) { worker->deleteLater(); return; }
+    entry->tocProcess = nullptr;
+    const QByteArray json = worker->readAllStandardOutput();
+    entry->tocPending = false;
+    entry->tocFailed = exitCode != 0 ||
+        !app::DecodeToc(json, entry->index->PageCount(), &entry->toc, &entry->stats);
+    if (!entry->tocFailed && entry->tocCacheKey == app::TocCacheKey(entry->path))
+        app::SaveTocCache(entry->tocCacheKey, json);
+    worker->deleteLater();
+    if (entry == cur()) {
+        toc_ = entry->toc;
+        refreshToc();
+    }
+    QTimer::singleShot(0, this, &MainWindow::startNextToc);
+}
+
+bool MainWindow::waitForTocs(int timeoutMs) {
+    auto ready = [this] {
+        for (const auto& entry : tabs_) if (entry->tocPending) return false;
+        return true;
+    };
+    startNextToc();
+    if (ready()) return true;
+    QEventLoop loop;
+    QTimer poll;
+    poll.setInterval(10);
+    connect(&poll, &QTimer::timeout, &loop, [&] { if (ready()) loop.quit(); });
+    QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+    poll.start();
+    loop.exec();
+    return ready();
+}
+
+int MainWindow::bookmarkCount() const {
+    return cur() ? cur()->bookmarks.size() : 0;
+}
+
+void MainWindow::refreshBookmarks() {
+    bookmarkTree_->clear();
+    if (const DocTab* entry = cur()) {
+        for (const auto& bookmark : entry->bookmarks) {
+            auto* item = new QTreeWidgetItem({bookmark.title, QString::number(bookmark.page + 1)});
+            item->setData(0, kPageRole, bookmark.page);
+            item->setToolTip(0, bookmark.title);
+            bookmarkTree_->addTopLevelItem(item);
+        }
+    }
+    bookmarkEmpty_->setVisible(bookmarkCount() == 0);
+    renameBookmarkAction_->setEnabled(false);
+    removeBookmarkAction_->setEnabled(false);
+}
+
+bool MainWindow::addBookmark(const QString& title) {
+    DocTab* entry = cur();
+    if (!entry || view_->pageCount() == 0) return false;
+    const int page = view_->page();
+    auto it = std::find_if(entry->bookmarks.begin(), entry->bookmarks.end(),
+                           [page](const app::Bookmark& b) { return b.page == page; });
+    if (it == entry->bookmarks.end()) {
+        entry->bookmarks.push_back({page, title.trimmed().isEmpty() ? tr("第 %1 页").arg(page + 1) : title.trimmed()});
+    } else if (!title.trimmed().isEmpty()) {
+        it->title = title.trimmed();
+    }
+    std::sort(entry->bookmarks.begin(), entry->bookmarks.end(),
+              [](const app::Bookmark& a, const app::Bookmark& b) { return a.page < b.page; });
+    app::Session::SaveBookmarks(entry->path, entry->bookmarks);
+    refreshBookmarks();
+    showSidebarPage(1);
+    for (int row = 0; row < entry->bookmarks.size(); ++row)
+        if (entry->bookmarks[row].page == page) bookmarkTree_->setCurrentItem(bookmarkTree_->topLevelItem(row));
+    return true;
+}
+
+bool MainWindow::renameBookmark(int row, const QString& title) {
+    DocTab* entry = cur();
+    if (!entry || row < 0 || row >= entry->bookmarks.size() || title.trimmed().isEmpty()) return false;
+    entry->bookmarks[row].title = title.trimmed();
+    app::Session::SaveBookmarks(entry->path, entry->bookmarks);
+    refreshBookmarks();
+    bookmarkTree_->setCurrentItem(bookmarkTree_->topLevelItem(row));
+    return true;
+}
+
+bool MainWindow::removeBookmark(int row) {
+    DocTab* entry = cur();
+    if (!entry || row < 0 || row >= entry->bookmarks.size()) return false;
+    entry->bookmarks.removeAt(row);
+    app::Session::SaveBookmarks(entry->path, entry->bookmarks);
+    refreshBookmarks();
+    return true;
+}
+
+bool MainWindow::jumpToBookmark(int row) {
+    const DocTab* entry = cur();
+    if (!entry || row < 0 || row >= entry->bookmarks.size()) return false;
+    view_->setPage(entry->bookmarks[row].page);
+    return true;
+}
+
+void MainWindow::editSelectedBookmark() {
+    const int row = bookmarkTree_->indexOfTopLevelItem(bookmarkTree_->currentItem());
+    if (!cur() || row < 0) return;
+    bool accepted = false;
+    const QString title = QInputDialog::getText(this, tr("重命名书签"), tr("书签名称"),
+        QLineEdit::Normal, cur()->bookmarks[row].title, &accepted);
+    if (accepted) renameBookmark(row, title);
+}
+
 void MainWindow::closeTab(int index) {
     if (index < 0 || index >= tabCount()) return;
-
-    if (index == activeTab_) stashActiveState();
-    DocTab* t = tab(index);
-    if (t) {
-        app::DocState st;
-        st.page     = t->page;
-        st.zoom     = t->zoom;
-        st.fitMode  = t->fitMode;
-        st.viewMode = t->viewMode;
-        st.invert   = t->invert;
-        st.valid    = true;
-        app::Session::SaveDocState(t->path, st);
-    }
-
-    tabBar_->blockSignals(true);
-    tabBar_->removeTab(index);
-    tabBar_->blockSignals(false);
-    tabs_.erase(tabs_.begin() + index);
-
-    if (tabs_.empty()) {
-        activeTab_ = -1;
+    stashActiveState();
+    DocTab* active = cur();
+    DocTab* removed = tab(index);
+    app::DocState st;
+    st.page = removed->page; st.zoom = removed->zoom; st.fitMode = removed->fitMode;
+    st.viewMode = removed->viewMode; st.invert = removed->invert; st.valid = true;
+    app::Session::SaveDocState(removed->path, st);
+    stopToc(removed);
+    // Borrowed page/text handles must be detached before their owner dies.
+    if (removed == active) {
+        view_->clearDocument();
         document_ = nullptr;
         index_ = nullptr;
+    }
+    { QSignalBlocker block(tabBar_); tabBar_->removeTab(index); }
+    tabs_.erase(tabs_.begin() + index);
+    activeTab_ = -1;
+    if (tabs_.empty()) {
         toc_ = pre::TocTree();
         currentPath_.clear();
         tocTree_->clear();
-        view_->clearDocument();
+        refreshBookmarks();
         tabBar_->hide();
-        setTocStatus(QString(), false);
+        setTocStatus(tr("打开文档后显示目录"), false);
         setWindowTitle(tr("PDF Reader"));
         updateStatus();
         return;
     }
-
-    const int next = std::min(index, tabCount() - 1);
-    activeTab_ = -1;           // force a full re-bind
+    int next = std::min(index, tabCount() - 1);
+    if (removed != active) for (int i = 0; i < tabCount(); ++i) if (tab(i) == active) next = i;
     activateTab(next);
+    startNextToc();
 }
 
 void MainWindow::onTabChanged(int index) { activateTab(index); }
@@ -682,41 +958,34 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
     app::Session::SetOpenTabs(open);
     app::Session::SetWindowGeometry(saveGeometry());
+    app::Session::SetSidebarState(splitter_->saveState());
     app::Session::Flush();
     QMainWindow::closeEvent(event);
 }
 
 void MainWindow::populateToc(const pre::TocTree& tree, const pre::ResolveStats& stats) {
     tocTree_->clear();
-    for (const auto& root : tree.roots) tocTree_->addTopLevelItem(MakeItem(root));
-    tocTree_->expandToDepth(1);
-
-    for (int c = 0; c < tocTree_->columnCount(); ++c) {
-        tocTree_->resizeColumnToContents(c);
+    for (size_t i = 0; i < tree.roots.size(); ++i)
+        tocTree_->addTopLevelItem(MakeItem(tree.roots[i], QString::number(i)));
+    if (cur() && cur()->tocStateSaved) {
+        for (QTreeWidgetItemIterator it(tocTree_); *it; ++it)
+            (*it)->setExpanded(cur()->expandedToc.contains((*it)->data(0, kNodeKeyRole).toString()));
+    } else {
+        tocTree_->expandToDepth(1);
     }
-    // Long Chinese headings would otherwise stretch the sidebar across the
-    // window; the tree scrolls horizontally instead.
-    if (tocTree_->columnWidth(0) > 300) tocTree_->setColumnWidth(0, 300);
-    tocTree_->setColumnWidth(1, 48);
-    if (splitter_) splitter_->setSizes({300, std::max(400, width() - 320)});
 
     if (tree.roots.empty()) {
-        setTocStatus(tr("未能在本文档中识别出目录（既无内嵌大纲，也未找到印刷目录页）。"),
+        setTocStatus(tr("未识别到目录"),
                      true);
         return;
     }
 
-    const char* src = pre::TocSourceName(tree.source);
-    QString detail;
-    if (tree.source == pre::TocSource::EmbeddedOutline) {
-        detail = tr("来源：文档内嵌大纲");
-    } else if (tree.source == pre::TocSource::PrintedTocPage) {
-        detail = tr("来源：自动识别印刷目录页（原文无大纲）· 标题定位命中率 %1")
-                     .arg(stats.titleHitRate, 0, 'f', 2);
-    } else {
-        detail = tr("来源：排版推断");
-    }
-    setTocStatus(tr("%1 · 共 %2 条").arg(detail).arg(tree.NodeCount()), false);
+    QString source = tr("排版目录");
+    if (tree.source == pre::TocSource::EmbeddedOutline) source = tr("文档目录");
+    else if (tree.source == pre::TocSource::PrintedTocPage) source = tr("自动目录");
+    setTocStatus(tr("%1 · %2 项").arg(source).arg(tree.NodeCount()), false);
+    tocStatus_->setToolTip(tr("目录来源：%1\n标题定位命中率：%2")
+        .arg(source).arg(stats.titleHitRate, 0, 'f', 2));
 }
 
 void MainWindow::onTocItemClicked(QTreeWidgetItem* item, int) {
@@ -728,7 +997,6 @@ void MainWindow::onTocItemClicked(QTreeWidgetItem* item, int) {
 
 void MainWindow::onPageChanged(int page) {
     updateStatus();
-    if (thumbs_) thumbs_->setCurrentPage(page);
 }
 
 void MainWindow::onZoomChanged(double) { updateStatus(); }
@@ -888,6 +1156,16 @@ void MainWindow::onFirstPage() { view_->goToFirstPage(); }
 void MainWindow::onLastPage() { view_->goToLastPage(); }
 
 void MainWindow::updateStatus() {
+    const bool loaded = document_ != nullptr;
+    addBookmarkAction_->setEnabled(loaded);
+    pageEdit_->setEnabled(loaded);
+    zoomBox_->setEnabled(loaded);
+    { QSignalBlocker block(pageEdit_); pageEdit_->setText(loaded ? QString::number(view_->page() + 1) : QString()); }
+    pageCountLabel_->setText(loaded ? tr("/ %1").arg(view_->pageCount()) : tr("/ —"));
+    { QSignalBlocker block(zoomBox_); zoomBox_->setCurrentText(loaded ? QString::number(qRound(view_->zoom() * 100)) + "%" : "100%"); }
+    continuousAction_->setChecked(view_->viewMode() == PdfView::ViewMode::Continuous);
+    fitWidthAction_->setChecked(loaded && view_->fitMode() == PdfView::FitMode::Width);
+    fitPageAction_->setChecked(loaded && view_->fitMode() == PdfView::FitMode::Page);
     if (!document_) {
         pageLabel_->setText(tr("未打开文档"));
         return;
@@ -895,7 +1173,7 @@ void MainWindow::updateStatus() {
     pageLabel_->setText(tr("第 %1 / %2 页    缩放 %3%")
                             .arg(view_->page() + 1)
                             .arg(view_->pageCount())
-                            .arg(static_cast<int>(view_->zoom() * 100)));
+                            .arg(qRound(view_->zoom() * 100)));
 }
 
 void MainWindow::fitWidth() {
@@ -911,6 +1189,7 @@ void MainWindow::applyZoom(double factor) {
 }
 
 bool MainWindow::runSelfTest(QString* report) {
+    waitForTocs();
     QStringList lines;
     bool ok = true;
 
@@ -930,6 +1209,10 @@ bool MainWindow::runSelfTest(QString* report) {
         return false;
     }
     check(view_->pageCount() > 0, QString("page count = %1").arg(view_->pageCount()));
+    view_->setViewMode(PdfView::ViewMode::Continuous);
+    view_->setFitMode(PdfView::FitMode::Width);
+    view_->goToFirstPage();
+    view_->grabViewport();
     check(view_->hasImage(), "page 1 rendered to an image");
 
     const int tocNodes = toc_.NodeCount();
@@ -1224,46 +1507,6 @@ bool MainWindow::runSelfTest(QString* report) {
         view_->goToFirstPage();
     }
 
-    // Thumbnails: one preview per page, and a preview that actually shows ink.
-    if (thumbs_) {
-        check(thumbs_->pageCount() == view_->pageCount(),
-              QString("thumbnail strip built %1 row(s) for %2 page(s)")
-                  .arg(thumbs_->pageCount())
-                  .arg(view_->pageCount()));
-
-        thumbs_->generateAllNow();
-        check(thumbs_->isComplete(),
-              QString("every thumbnail rendered (%1/%2)")
-                  .arg(thumbs_->generatedCount())
-                  .arg(thumbs_->pageCount()));
-
-        // A blank preview would mean the icon never made it into the item.
-        const int probePage = std::min(2, view_->pageCount() - 1);
-        const QImage thumb = thumbs_->thumbnail(probePage);
-        int inkPixels = 0;
-        for (int y = 0; y < thumb.height(); y += 2) {
-            for (int x = 0; x < thumb.width(); x += 2) {
-                const QRgb px = thumb.pixel(x, y);
-                if (qRed(px) < 240 || qGreen(px) < 240 || qBlue(px) < 240) ++inkPixels;
-            }
-        }
-        lines << QString("INFO  thumbnail of page %1 is %2x%3 with %4 ink sample(s)")
-                     .arg(probePage + 1).arg(thumb.width()).arg(thumb.height())
-                     .arg(inkPixels);
-        check(!thumb.isNull() && inkPixels > 20,
-              QString("thumbnail of page %1 has real content").arg(probePage + 1));
-
-        // Clicking a preview must move the reader, through the real signal.
-        const int wantThumbPage = std::min(4, view_->pageCount() - 1);
-        thumbs_->activatePage(wantThumbPage);
-        check(view_->page() == wantThumbPage,
-              QString("activating thumbnail %1 moved the view there (got %2)")
-                  .arg(wantThumbPage + 1).arg(view_->page() + 1));
-        check(thumbs_->currentRow() == wantThumbPage,
-              "the strip highlights the page being read");
-        view_->goToFirstPage();
-    }
-
     // Invert colours: the toggle must reach the pixels, not just the model.
     if (view_) {
         view_->setInvertColors(false);
@@ -1456,8 +1699,7 @@ void MainWindow::writeSessionState(int page, double zoom) {
 }
 
 bool MainWindow::verifySessionRestore(int wantPage, double wantZoom, QString* detail) {
-    // openDocument() restores the saved state through a deferred timer, so give
-    // the event loop a chance to run it before observing the result.
+    // Settle layout before observing a restored reading position.
     QCoreApplication::processEvents();
     QCoreApplication::processEvents();
 
@@ -1641,18 +1883,6 @@ QString MainWindow::benchmarkResize() {
     view_->setFitMode(saved);
     const double fitting = runResize(12);
 
-    // Second A/B, on the thumbnail strip: an IconMode QListView with
-    // ResizeMode::Adjust re-lays out every item whenever the view is resized.
-    QString thumbsNote = QStringLiteral("no thumbnail strip");
-    if (thumbs_) {
-        thumbs_->setResizeMode(QListView::Fixed);
-        const double fixedMode = runResize(12);
-        thumbs_->setResizeMode(QListView::Adjust);
-        thumbsNote = QString("thumbnail strip adds %1 ms (Adjust) vs %2 ms (Fixed)")
-                         .arg(fitting - fixedMode, 0, 'f', 1)
-                         .arg(fixedMode, 0, 'f', 1);
-    }
-
     // Third A/B, on the sidebar as a whole. The wrapped status label is the
     // suspect: height-for-width labels can force repeated layout passes.
     QString sidebarNote = QStringLiteral("no sidebar");
@@ -1667,12 +1897,10 @@ QString MainWindow::benchmarkResize() {
 
     return QString("resize        : %1 ms/step fitting, %2 ms/step plain window "
                    "relayout (fit path adds %3 ms)\n"
-                   "                %4\n"
-                   "                %5")
+                   "                %4")
         .arg(fitting, 0, 'f', 1)
         .arg(plain, 0, 'f', 1)
         .arg(fitting - plain, 0, 'f', 1)
-        .arg(thumbsNote)
         .arg(sidebarNote);
 }
 

@@ -1,311 +1,129 @@
-# pdfreader
+# PDF Reader
 
-一个自用的 PDF 阅读器：连续滚动、文字选择、查找、标签页、缩略图、标注、打印
+一个支持高清阅读、自动目录和个人书签的 Windows PDF 阅读器，使用 C++17、Qt 6 和 PDFium 开发。
 
-C++17 / Qt 6 / PDFium
+**[下载 Windows 一键安装包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/PDFReader-Setup.exe)** · [下载免安装版](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/PDFReader-Portable.exe) · [所有版本](https://github.com/TheGadflyAndMontalleni/pdfreader/releases)
 
----
+适用于 Windows 10 / 11 的 64 位 x64 电脑。安装包已包含 Qt、PDFium 等运行组件。
 
-## 快速开始
+![PDF Reader 界面](docs/images/welcome.png)
 
-```powershell
-# 构建（首次会配置 CMake，之后是增量编译）
-pwsh -NoProfile -File tools/build.ps1
+## 下载与安装
 
-# 运行
-build\pdfreader.exe "D:\path\to\book.pdf"
+1. 点击上方的 **Windows 一键安装包**，下载 `PDFReader-Setup.exe`。
+2. 双击安装包，点击 **一键安装**。
+3. 安装完成后阅读器会自动打开；以后使用桌面或开始菜单中的 **PDF Reader** 快捷方式。
 
-# 验证：跑完整套检查，全部通过才返回 0
-pwsh -NoProfile -File tools/verify.ps1
+安装面向当前用户，不需要管理员权限。程序安装到 `%LOCALAPPDATA%\Programs\PDFReader`，并加入 PDF 文件的“打开方式”和 Windows 默认应用列表。覆盖运行新版安装包即可升级，阅读记录和个人书签会保留。
 
-# 打包成单个 exe（可选）
-pwsh -NoProfile -File tools/make_sfx.ps1
+需要设为默认阅读器时，在 Windows **设置 → 应用 → 默认应用** 中选择 PDF Reader。Windows 要求用户亲自确认默认应用选择。
 
-# 装成你自己的 PDF 阅读器（可选）
-pwsh -NoProfile -File tools/install.ps1
-```
+卸载：在 Windows **设置 → 应用 → 已安装的应用** 中找到 **PDF Reader**，点击卸载。个人阅读记录和书签会保留。
 
-`verify.ps1` 是这份交付的**证据**：它把下面每一条声明都跑一遍并打印 PASS/FAIL。
-`-SkipBuild` 跳过重新编译，`-Corpus <目录>` 换一个语料目录做目录覆盖率普查。
+### 免安装版
 
-### 装成系统里的 PDF 阅读器
+下载 `PDFReader-Portable.exe` 后双击运行。首次会把运行组件释放到 `%LOCALAPPDATA%\PDFReader`，以后直接启动；阅读记录和书签保存在当前电脑的用户设置中。
+
+### 下载校验
+
+每个 Release 都提供 [SHA256SUMS.txt](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/SHA256SUMS.txt)。在 PowerShell 中计算下载文件的 SHA-256，与该文件中的值核对：
 
 ```powershell
-pwsh -NoProfile -File tools/install.ps1              # 安装
-pwsh -NoProfile -File tools/install.ps1 -SetDefault  # 顺带尝试设为默认
-pwsh -NoProfile -File tools/uninstall.ps1            # 卸载
+Get-FileHash .\PDFReader-Setup.exe -Algorithm SHA256
 ```
 
-安装脚本做的事（**全部写在 HKCU，不需要管理员权限，不碰系统其它部分**）：
-
-1. 把程序复制到 `%LOCALAPPDATA%\Programs\PDFReader\`
-2. 建开始菜单快捷方式
-3. 注册 ProgID `PDFReader.pdf`、`.pdf\OpenWithProgids`、`Applications\PDFReader.exe`
-   和 `RegisteredApplications` —— 于是它同时出现在**右键「打开方式」**和
-   **设置 → 默认应用**里
-4. 通知资源管理器刷新关联缓存
-
-装完之后：
-
-- **右键任意 PDF → 打开方式 → PDF Reader**
-- 或**开始菜单搜索 "PDF Reader"**
-- 想设为默认：`-SetDefault` 会打开 Windows 的「默认应用」页。Windows 10+
-  用只有设置界面能生成的哈希保护默认程序选择，脚本**无法**静默接管 ——
-  这是系统的设计，只能你在那页点两下。
-
-卸载只删除它自己创建的东西；你的阅读记录和最近文件留在
-`%LOCALAPPDATA%\pdfreader\settings.ini`，需要的话手动删。
-
-
-### 构建前提
-
-仓库里**只放源码**（约 320 KB）。工具链和预编译依赖体积很大，需要自行准备，
-按下面的路径放好即可 —— `tools/build.ps1` 会从这里找：
-
-| 需要什么 | 放到哪 | 从哪来 |
-|---|---|---|
-| MinGW-w64 13.1.0 | `tools/Tools/mingw1310_64/` | [winlibs](https://winlibs.com/) 的 GCC 13.1.0 + POSIX 线程版 |
-| Qt 6.8.3（动态版） | `tools/`（含 `bin/`、`lib/cmake/`） | `aqt install-qt windows desktop 6.8.3 win64_mingw` |
-| PDFium 预编译 | `tools/pdfium/`（含 `include/`、`lib/`、`bin/`） | [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) 的 `chromium/8100` |
-| CMake + Ninja | `.venv/Scripts/`（或自行加入 PATH） | `python -m venv .venv; .venv\Scripts\pip install cmake ninja` |
-
-PDFium 官方预编译包带的是 MSVC 导入库，MinGW 链接不了。
-`tools/make_pdfium_implib.ps1` 会把它转换成 MinGW 可用的 `libpdfium.a`。
-
-### 打包成单个 exe
-
-```powershell
-pwsh -NoProfile -File tools/make_sfx.ps1
-# 产出 dist\PDFReader.exe（约 63 MB）
-```
-
-`make_sfx.ps1` 把主程序和全部 15 个运行时文件（Qt、PDFium、MinGW 运行时、
-Qt 平台插件）作为资源嵌进一个小的 Win32 启动器。运行它时：
-
-1. 首次：解压到 `%LOCALAPPDATA%\PDFReader`，然后启动主程序；
-2. 之后：`.stamp` 匹配当前构建，**跳过解压**直接启动。
-
-命令参数会透传给主程序，所以 `PDFReader.exe --selftest book.pdf > log.txt` 也能用
-（启动器等待子进程并返回它的退出码）。
-
-
----
+当前安装包尚未代码签名，Windows 可能显示“未知发布者”。官方安装文件通过本仓库的 Releases 分发。
 
 ## 功能
 
-### (1) 阅读：连续滚动 / 缩放 / 导航 / 快捷键
-
-整篇文档是**一条连续的页面长条**，滚动没有页面边界。缩放锚定当前页，滚动位置不跳。
+- **高清阅读**：按屏幕实际像素倍率渲染，支持 100%、150%、200% 等显示缩放；大幅放大时仅渲染可见区域。
+- **快速打开**：先显示正文，再在独立进程中生成自动目录；目录按文件大小和修改时间缓存，文件变化后重建。
+- **自动目录**：优先使用 PDF 内嵌大纲；没有大纲时，尝试识别印刷目录页，再从标题排版推断。侧栏支持一键全部展开或收起。
+- **个人书签**：保存当前页、跳转、重命名、删除；按文档保存在本机，重启后仍可使用。
+- **连续或单页阅读**：适应宽度、适应页面、页码输入、缩放输入、夜间反色。
+- **选择和查找**：跨页文字选择、复制、全文查找与命中高亮。
+- **多标签与阅读记录**：独立保存各文档的位置和阅读模式，恢复上次标签和最近文件。
+- **标注与打印**：高亮、下划线、删除线、撤销、另存为，以及打印或保留文字层的 PDF 页范围导出。
 
 | 操作 | 快捷键 |
-|---|---|
-| 上/下一页 | PageUp / PageDown |
-| 向下/向上翻屏 | Space / Shift+Space |
-| 首/末页 | Home / End |
-| 上/下/左/右滚动 | 方向键 |
-| 放大 / 缩小 | Ctrl++ / Ctrl+- |
-| 适应宽度 / 适应页面 | Ctrl+0 / Ctrl+1 |
-| 连续视图 / 单页视图 | C / Ctrl+6 |
+| --- | --- |
+| 打开 PDF / 添加当前页书签 | Ctrl+O / Ctrl+D |
+| 查找 / 下一个匹配 | Ctrl+F / F3 |
 | 跳转到页 | Ctrl+G |
-| 中键拖拽平移 | 按住鼠标中键拖动 |
-| 反色（夜间阅读） | I |
-| 次像素文字开关 | 视图菜单（默认关，见下） |
-| 整页滚动 | 鼠标滚轮；Ctrl+滚轮缩放 |
+| 放大 / 缩小 | Ctrl++ / Ctrl+-，或 Ctrl+滚轮 |
+| 适应宽度 / 页面 | Ctrl+0 / Ctrl+1 |
+| 上一页 / 下一页 | PageUp / PageDown |
+| 关闭标签 / 恢复关闭的文件 | Ctrl+W / Ctrl+Shift+T |
+| 复制 / 全选 / 打印 | Ctrl+C / Ctrl+A / Ctrl+P |
+| 高亮 / 下划线 / 撤销 | Ctrl+H / Ctrl+U / Ctrl+Z |
+| 反色 | I |
 
-**关于次像素文字（重要）**：默认使用**灰度抗锯齿**，和 MuPDF（SumatraPDF 的引擎）一致。
-`FPDF_LCD_TEXT` 的次像素抗锯齿只有在字形正好落在整数像素上才更锐利；PDF 的字形位置是
-小数坐标，实际缩放后每个字的相位都不同，结果是**红蓝毛边**而不是清晰。
+书签位于左侧“书签”标签，目录操作位于“目录”标签上方。
 
-同一页、同一缩放（1.776）实测：
+## 0.2.0 更新
 
-| | 平均通道差 | 明显彩色像素 | 深色像素 |
-|---|---|---|---|
-| 次像素抗锯齿 | 5.18 | 24,860 | 7,701 |
-| **灰度抗锯齿** | **0** | **0** | **12,063** |
+修复高分屏文字发虚、拖动标签后文档错位和多文档阅读状态串档；移除缩略图与后台任务，加入个人书签、目录展开/收起和完整安装程序。
 
-灰度渲染的**墨量多 57%**，字更实。如果你在标准 LCD 上更喜欢次像素，视图菜单可以打开。
+本机 61 页样本的打开文件调用约从 248 ms 降至 25 ms，200% 屏幕倍率下首屏约 65 ms。计时不包含进程冷启动和免安装版首次释放组件的时间。详见 [发布说明](docs/release-0.2.0.md)。
 
-工具栏还提供 打开 / 上一页 / 下一页 / 放大 / 缩小 / 适应宽度 / 适应页面 / 单页·连续。
+## 从源码构建
 
-### (2) 文字选择与复制
+开发者需准备以下工具；普通用户使用上方安装包即可。
 
-在页面上拖拽选择，双击选整行，Ctrl+A 全选，Ctrl+C 复制。
-选择跨行、跨页都成立；选中内容按阅读顺序拼接，中日韩文本不额外插空格。
+| 依赖 | 版本 | 目录 |
+| --- | --- | --- |
+| MinGW-w64 | GCC 13.1.0，POSIX 线程版 | `tools/Tools/mingw1310_64/` |
+| Qt 动态库与开发文件 | 6.8.3，win64_mingw | `tools/`，含 `bin/`、`lib/cmake/`、`sbom/` |
+| PDFium 预编译包 | chromium/8100 | `tools/pdfium/`，含 `include/`、`lib/`、`bin/`、`licenses/` |
+| Python、CMake、Ninja | CMake 3.20+ | `.venv/Scripts/` |
+| PowerShell | 7+ | `pwsh` |
+| Inno Setup（生成安装包） | 6.7+ | 用 `-InnoCompiler` 指定 `ISCC.exe` |
 
-### (3) 查找
+下载来源：[Qt](https://download.qt.io/archive/qt/6.8/6.8.3/)、[PDFium](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8100)、[MinGW-w64](https://www.mingw-w64.org/)、[Inno Setup](https://jrsoftware.org/isdl.php)。打包时使用 Qt 安装目录中的 `sbom/qtbase-6.8.3.spdx` 提供第三方版权信息。
 
-Ctrl+F 打开查找条，F3 / Shift+F3 在结果间跳转。
-大小写敏感可选；命中项高亮，当前项用不同颜色标出并滚动到可见；状态栏显示 `3 / 27`。
-匹配基于码点而非字节，因此中文不会被半个字符切断。
-
-### (4) 日常可用性
-
-- **标签页**：一个标签栏加一套侧栏/视图，多文档之间切换。每个标签**独立记住**页码、
-  缩放、缩放模式、视图模式和反色状态。
-- **最近文件**：文件菜单里最多 12 条，自动剔除已不存在的路径，可一键清空。
-- **记住上次阅读位置**：按文档路径哈希存进 INI，**跨进程**生效。
-- **重新打开上次关闭的文件**：Ctrl+Shift+T。
-- **恢复上次的标签页**：启动时不带参数即恢复上次打开的整组标签。
-- **缩略图侧栏**：分帧懒生成，长文档打开不卡；点击即跳转，当前页跟随高亮。
-- **打印**：Ctrl+P，支持全部 / 当前页 / 页码范围。
-- **标注**：高亮（Ctrl+H）、下划线（Ctrl+U）、删除线、撤销（Ctrl+Z）、另存为。
-
-### (5) 自动目录 —— 核心差异能力
-
-**无论原 PDF 有没有大纲，侧边栏总能给出可点击跳转的目录树。**
-
-四层策略，逐层降级，前一层拿不到才试下一层：
-
-| 层 | 来源 | 适用 |
-|---|---|---|
-| **L0** | 内嵌 `/Outlines` 书签大纲 | 原生就带目录的文档 |
-| **L1** | `/PageLabels` 页码映射 | 不是独立来源，供 L2 把「印刷页码」换算成物理页 |
-| **L2** | **印刷目录页** | 正文前有几页排好的目录列表 |
-| **L3** | **排版启发式** | 既无大纲也无目录页，只能从版式反推 |
-
-**L2（印刷目录页）** 扫描正文前的若干页，逐行解析「标题 …… 页码」，
-用 `PlausibleToc` 做可信度判定（条目数、页码是否落在 `[1, 页数+2]`、
-页码是否大体单调不减），再用 `/PageLabels` 或偏移量把印刷页码换成物理页。
-
-**L3（排版启发式）** 是这一层的兜底，也是最难的部分。它做的事：
-
-1. **局部基准**：取**每页**行高的中位数作为该页的"正文高度"。
-   *（为什么不能用全局字符数众数：表格密集的文档里众数是表格文字 7.5pt，
-   于是正文段落 15pt 会被算成"2 倍于正文"，**每一段都变成标题**。
-   这一条把误检从 297 条降到 15 条。）*
-2. **相对信号**：粗体只在**正文本身不是粗体时**才算信号 —— 整篇都用粗体时它零区分力。
-3. **成批排除**：同一页有 4 行以上字高完全相同，那是正文段落或表格，不是标题。
-4. **留白**：与相邻行的间距超过页中位间距 1.5 倍，算"被排版隔开"。
-5. **文字性过滤**：标题必须含文字（排除页码 `15`、碎片 `63f`），排除纯日期行。
-6. **编号序列恢复**：全文递增的顶层编号（`一、二、三…` 或 `第1章、第2章…`）
-   本身就是一份"文档没写出来的目录"。**单个看它和列表项无异，连成序列就只有章节能做到。**
-   这一步专门用来救回**与正文完全同字号**的章节标题。
-
-当前语料成绩（`verify.ps1` 会重新跑一遍）：
-
-```
-内嵌大纲     6 篇
-印刷目录页   9 篇
-排版推断     5 篇
-------------------
-可加载文档  20 篇，20 篇全部生成目录，共 932 条，0 条跳转目标无法解析
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install cmake ninja
+pwsh -NoProfile -File tools/make_pdfium_implib.ps1
+pwsh -NoProfile -File tools/build.ps1
+.\build\pdfreader.exe "C:\path\to\document.pdf"
 ```
 
----
+### 生成发布文件
 
-## 技术选型
+```powershell
+pwsh -NoProfile -File tools/make_release.ps1 `
+  -InnoCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+```
 
-**为什么不用 SumatraPDF 的代码。** SumatraPDF 是 GPL-3.0。照搬它的代码会把整个
-项目变成 GPL，这不是"属于我自己的软件"想要的结果。所以：**用 REA 分析它的实现思路，
-但不复制它的代码**。分析结论见 [docs/analysis.md](docs/analysis.md)。
+生成 `dist/PDFReader-Setup.exe`、`dist/PDFReader-Portable.exe` 和 `dist/SHA256SUMS.txt`。二进制通过 GitHub Release 附件分发。已有构建可加 `-SkipBuild`，也可分别运行 `tools/make_installer.ps1` 和 `tools/make_sfx.ps1`。
 
-| 依赖 | 版本 | 许可证 | 说明 |
-|---|---|---|---|
-| Qt | 6.8.3 | LGPL-3.0 | **动态链接**，满足 LGPL 的可替换要求 |
-| PDFium | chromium/8100 | BSD-3-Clause | 宽松许可，可静态链接 |
-| MinGW-w64 | 13.1.0 | GPL + 运行时例外 | 编译器运行时例外允许分发产物 |
+### 验证
 
-产物共约 60 MB，主要是 `pdfium.dll`（30.7 MB）和各 Qt 模块。
+```powershell
+pwsh -NoProfile -File tools/verify.ps1 -Corpus "C:\path\to\pdf-corpus"
+pwsh -NoProfile -File tools/verify_installer.ps1 `
+  -Pdf "C:\path\to\quality2020.pdf"
+```
 
-**为什么 Qt 用动态链接**：LGPL 要求最终用户能替换该库。动态链接是最省事的合规方式，
-不需要提供目标文件或静态库重链接能力。
-
----
+验证使用独立设置文件；安装器验证另外编译测试身份的安装包，将注册项和快捷方式隔离到测试位置。回归样本需要有文字、可用目录和足够页面；默认语料中的 `quality2020.pdf` 用于自动目录、跨页导航和标注检查。
 
 ## 代码结构
 
-```
-src/
-  doc.{h,cpp}           Document / Library（PDFium 生命周期、内存加载）
-  text.{h,cpp}          字符与行的抽取、字重/字号判定、UTF-8 编解码
-  render.{h,cpp}        页面光栅化
-  find.{h,cpp}          跨文档查找（基于码点）
-  annot.{h,cpp}         标注：烘焙进页面内容
-  toc.{h,cpp}           目录模型 + L0/L2/L3 调度
-  printed_toc.cpp       L2：印刷目录页解析
-  toc_typography.cpp    L3：排版启发式
-  app/
-    main.cpp            命令行入口与验证开关
-    mainwindow.{h,cpp}  菜单、标签页、侧栏、查找条、验证辅助
-    pdfview.{h,cpp}     自绘滚动视图：布局、选择、查找、标注、缩放手势
-    thumbnails.{h,cpp}  缩略图侧栏（分帧懒生成）
-    printing.{h,cpp}    打印与矢量导出
-    session.{h,cpp}     跨进程状态：阅读位置、最近文件、标签组
-```
+- `src/doc.*`、`text.*`、`render.*`：PDF 生命周期、文字抽取、高清与裁剪渲染。
+- `src/toc.*`、`printed_toc.cpp`、`toc_typography.cpp`：内嵌大纲、印刷目录和排版推断。
+- `src/app/`：Qt 界面、书签、会话、打印与独立目录进程。
+- `tools/installer/`：Windows 安装程序；`tools/stage_runtime.ps1` 统一准备运行库与许可证。
+- `tests/`：PDFium 探针、目录检查和阅读器回归。
 
-约 5,900 行。
+## 当前限制
 
----
+- 扫描 PDF 的图片清晰度取决于文件本身，目前不提供 OCR。
+- 自动目录使用启发式识别，复杂排版、表格和没有文字层的文件可能无法生成准确目录。
+- 标注烘焙进页面，不是其他阅读器中可独立编辑的交互式注释。
+- 实体打印机使用光栅打印；导出 PDF 页范围保留文字层。
+- 当前提供 Windows x64 版本。
 
-## 验证
+## 许可证
 
-每一条声明都有可复现的证据。`tools/verify.ps1` 是总入口，覆盖：
-
-| 检查 | 手段 |
-|---|---|
-| 阅读器自检（54 条断言） | 真实对象上的程序化断言，见下 |
-| 标签页与每标签状态 | `--selftest-tabs`，两个不同文档 |
-| 跨进程会话 | 写一次、**另一个进程**读回、外加一个必然失败的反向对照 |
-| 矢量导出 | 导出 5 页 → 用 PDFium **重新打开** → 断言页数与字符数；外加不可写路径的反向对照 |
-| 目录覆盖率 | 遍历语料，统计来源分布与未解析跳转数 |
-
-自检里几条值得单独说明的断言（它们验的是**看到的像素**，不是标志位）：
-
-```
-PASS  continuous content (81581px) is taller than the viewport
-PASS  fit-page keeps the whole page inside the viewport
-PASS  page content lies inside the viewport horizontally (x=387)
-PASS  single page fits vertically (754px vs 754px)
-PASS  thumbnail strip built 61 row(s) for 61 page(s)
-PASS  thumbnail of page 3 has real content
-PASS  activating thumbnail 5 moved the view there (got 5)
-PASS  invert darkens the page (242.6 -> 6.6)
-PASS  turning invert off restores the page (6.6 -> 242.6)
-PASS  the highlight is visible on screen (2964 changed px)
-PASS  undo removes the mark (2964 -> 0 changed px)
-PASS  the mark survived saving (1093 px)
-```
-
-调试开关（`--selftest` 之外的独立入口）：
-
-```
---select-line 页:行     选中某行          --find 文本        执行查找
---select-all            全选              --markup 类型      高亮/下划线/删除线
---view single|continuous                  --fit width|page|none
---side toc|thumbs                         --invert
---print-test 文件 --print-out 产物.pdf --page N --page-to M
---session-write / --session-read 文件 --page N --zoom Z
-```
-
-设置项走 `PDFREADER_SETTINGS` 环境变量，所以测试永远不碰真实配置。
-
----
-
-## 已知限制
-
-写在前面，因为它们都是实测出来的，不是猜测：
-
-1. **打印到真实打印机是光栅的。** PDFium 的公开 API 不提供矢量打印输出，
-   这是与 SumatraPDF（MuPDF 可矢量打印）的真实差距。
-   **但"打印成 PDF 文件"走的是矢量路径**（`FPDF_ImportPages`），
-   保留文字层、体积小一个数量级，我们的目录引擎在产物上依然可用。
-2. **标注是烘焙进页面内容的，是单向的。** 不是其他阅读器能选中/编辑/删除的
-   交互式注释。原因见 [docs/analysis.md](docs/analysis.md) 第 4 节：
-   PDFium 无法设置文本标记注释的 `/QuadPoints`，用它的 API 造出来的高亮
-   **在文件里存在但在任何阅读器里都不可见**。
-
-3. **L3 排版推断的精度在附录表格区一般。** 跳转目标永远是对的（标题的跳转目标
-   就是它所在的页），但表格单元偶尔会被提升成条目。
-
-4. **标注是全同步操作，89 ms/页。** 对 61 页文档全选标注约 5.5 秒（已加等待光标）。
-
-5. **未实现**：命令面板、EPUB/CBZ/DjVu/CHM/XPS 等其他格式、
-   标注的交互式编辑、多标签的并排视图、表单填写。
-
----
-
-## 第三方
-
-- Qt 6.8.3（LGPL-3.0）— 动态链接
-- PDFium（BSD-3-Clause）— 来自 chromium/8100 分支
-- 构建工具链 MinGW-w64 13.1.0
+本项目使用 [MIT License](LICENSE)。Qt 使用动态链接，第三方许可证与来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。安装版和免安装版均包含相应许可文件。

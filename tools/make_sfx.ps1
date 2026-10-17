@@ -10,7 +10,8 @@
 # Output: dist\PDFReader.exe
 [CmdletBinding()]
 param(
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+    [string] $OutputName = 'PDFReader.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,42 +38,8 @@ foreach ($tool in $gpp, $windres) {
 }
 
 # ---- stage the payload ----------------------------------------------------
-# Everything in build\ that the reader needs at runtime: the program, the Qt
-# runtime it was linked against, the platform plugin windeployqt produced, the
-# MinGW runtime, and PDFium. Helper executables (toc_build, probes) stay out.
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-$wanted = @(
-    'pdfreader.exe'
-    'pdfium.dll'
-    'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6PrintSupport.dll', 'Qt6Network.dll'
-    'libstdc++-6.dll', 'libgcc_s_seh-1.dll', 'libwinpthread-1.dll'
-)
-$payload = @()
-foreach ($name in $wanted) {
-    $src = Join-Path $build $name
-    if (Test-Path $src) {
-        Copy-Item $src $stage -Force
-        $payload += $name
-    } else {
-        Write-Warning "missing $name (skipped)"
-    }
-}
-
-# Qt plugins live in subdirectories; keep their relative paths.
-foreach ($pluginDir in 'platforms', 'styles', 'imageformats') {
-    $srcDir = Join-Path $build $pluginDir
-    if (-not (Test-Path $srcDir)) { continue }
-    Get-ChildItem $srcDir -Filter *.dll | ForEach-Object {
-        $rel = "$pluginDir\$($_.Name)"
-        $destDir = Join-Path $stage $pluginDir
-        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-        Copy-Item $_.FullName $destDir -Force
-        $payload += $rel
-    }
-}
-
+# Share the exact runtime and license payload with the native installer.
+$payload = @(& (Join-Path $PSScriptRoot 'stage_runtime.ps1') -Destination $stage)
 if ($payload.Count -eq 0) { throw 'nothing to package' }
 
 # ---- generate the resource script ----------------------------------------
@@ -109,8 +76,8 @@ if (Test-Path $iconSrc) {
 # blank -- verified by tools/verify.ps1.
 [void]$sb.AppendLine(@'
 VS_VERSION_INFO VERSIONINFO
-    FILEVERSION     0,1,0,0
-    PRODUCTVERSION  0,1,0,0
+    FILEVERSION     0,2,0,0
+    PRODUCTVERSION  0,2,0,0
     FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
     FILEFLAGS       0
     FILEOS          VOS_NT_WINDOWS32
@@ -123,11 +90,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "TheGadflyAndMontalleni"
             VALUE "FileDescription",  "PDF Reader"
-            VALUE "FileVersion",      "0.1.0.0"
+            VALUE "FileVersion",      "0.2.0.0"
             VALUE "InternalName",     "PDFReader"
             VALUE "OriginalFilename", "PDFReader.exe"
             VALUE "ProductName",      "PDF Reader"
-            VALUE "ProductVersion",   "0.1.0.0"
+            VALUE "ProductVersion",   "0.2.0.0"
             VALUE "Comments",         "PDF reader with automatic table-of-contents reconstruction"
         END
     END
@@ -141,7 +108,10 @@ Set-Content -Path $rcPath -Value $sb.ToString() -Encoding ascii
 
 # ---- compile --------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$outExe = Join-Path $dist 'PDFReader.exe'
+if ([IO.Path]::GetFileName($OutputName) -ne $OutputName -or [IO.Path]::GetExtension($OutputName) -ne '.exe') {
+    throw 'OutputName must be an .exe filename without a directory.'
+}
+$outExe = Join-Path $dist $OutputName
 
 Push-Location $stage
 try {

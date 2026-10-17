@@ -25,7 +25,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 
 $exe   = Join-Path $BuildDir 'pdfreader.exe'
 $tocExe = Join-Path $BuildDir 'toc_build.exe'
-$tmp   = Join-Path ([IO.Path]::GetTempPath()) 'pdfreader-verify'
+$tmp   = Join-Path ([IO.Path]::GetTempPath()) ("pdfreader-verify-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 # Keep the user's real configuration out of the way for the whole run.
@@ -41,10 +41,30 @@ function Record([string]$Name, [bool]$Ok, [string]$Detail = '') {
 
 function Invoke-Reader {
     param([string[]] $Arguments)
+    return Invoke-Executable -Program $exe -Arguments $Arguments
+}
+
+function Invoke-Executable {
+    param([string] $Program, [string[]] $Arguments)
     $out = Join-Path $tmp 'out.txt'
-    $p = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow `
-                       -RedirectStandardOutput $out -ArgumentList $Arguments
-    return @{ Code = $p.ExitCode; Text = (Get-Content $out -Raw -ErrorAction SilentlyContinue) }
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $Program
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $info
+    [void]$process.Start()
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $result = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
+    Set-Content -LiteralPath $out -Value $result -Encoding utf8
+    $code = $process.ExitCode
+    $process.Dispose()
+    return @{ Code = $code; Text = $result }
 }
 
 if (-not $SkipBuild) {
@@ -53,6 +73,12 @@ if (-not $SkipBuild) {
         Select-String -Pattern 'error|Error' | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
 }
 if (-not (Test-Path $exe)) { throw "missing $exe (run tools/build.ps1)" }
+# Exercise real widgets without flashing test windows on the user's desktop.
+$pluginRoot = Join-Path $PSScriptRoot '..\tools\plugins'
+if (-not $env:QT_QPA_PLATFORM -and (Test-Path (Join-Path $pluginRoot 'platforms\qoffscreen.dll'))) {
+    $env:QT_QPA_PLATFORM = 'offscreen'
+    $env:QT_PLUGIN_PATH = $pluginRoot
+}
 
 # The self-test needs one document with text, a printed table of contents and
 # enough pages to scroll. Any of the corpus files works.
@@ -143,7 +169,8 @@ Write-Host "`n=== 6. packaging artefacts ===" -ForegroundColor Cyan
 # The icon and the version block live in the PE resource table. Losing either is
 # silent: the app still runs, it just looks like an anonymous executable again.
 Add-Type -AssemblyName System.Drawing
-$sfxPath = Join-Path $PSScriptRoot '..\dist\PDFReader.exe'
+$sfxPath = Join-Path $PSScriptRoot '..\dist\PDFReader-Portable.exe'
+if (-not (Test-Path $sfxPath)) { $sfxPath = Join-Path $PSScriptRoot '..\dist\PDFReader.exe' }
 foreach ($candidate in @(
         @{ Name = 'reader exe'; Path = $exe }
         @{ Name = 'single-file package'; Path = $sfxPath }
@@ -172,6 +199,33 @@ if (Test-Path $iconSource) {
     Record 'icon file carries multiple sizes' ($iconCount -ge 4) "$iconCount sizes"
 } else {
     Record 'icon file exists' $false 'run tools/make_icon.ps1'
+}
+
+Write-Host "`n=== 7. reading, bookmarks and high-DPI regressions ===" -ForegroundColor Cyan
+$regressions = Join-Path $BuildDir 'reader_regressions.exe'
+if ((Test-Path $regressions) -and $two) {
+    $previousScale = $env:QT_SCALE_FACTOR
+    $previousPlatform = $env:QT_QPA_PLATFORM
+    $previousPlugins = $env:QT_PLUGIN_PATH
+    try {
+        $env:QT_QPA_PLATFORM = 'offscreen'
+        $env:QT_PLUGIN_PATH = $pluginRoot
+        foreach ($scale in @('1', '1.5', '2')) {
+            $env:QT_SCALE_FACTOR = $scale
+            $r = Invoke-Executable -Program $regressions -Arguments @($sample.FullName, $two.FullName)
+            $assertions = ([regex]::Matches($r.Text, '(?m)^PASS')).Count
+            Record "reading regressions at ${scale}x" ($r.Code -eq 0 -and $r.Text -match 'REGRESSIONS PASS') "$assertions assertions"
+            foreach ($line in ($r.Text -split "`n" | Where-Object { $_ -match '^INFO|^FAIL' })) {
+                Write-Host "         $($line.Trim())"
+            }
+        }
+    } finally {
+        $env:QT_SCALE_FACTOR = $previousScale
+        $env:QT_QPA_PLATFORM = $previousPlatform
+        $env:QT_PLUGIN_PATH = $previousPlugins
+    }
+} else {
+    Record 'reading regression executable and two fixtures available' $false 'rebuild the project and provide two PDFs'
 }
 
 Write-Host "`n=== summary ===" -ForegroundColor Cyan
