@@ -228,6 +228,17 @@ if ((Test-Path $regressions) -and $two) {
     Record 'reading regression executable and two fixtures available' $false 'rebuild the project and provide two PDFs'
 }
 
+Write-Host "`n=== 8. native plugin lifecycle ===" -ForegroundColor Cyan
+$pluginTests = Join-Path $BuildDir 'plugin_regressions.exe'
+if ((Test-Path -LiteralPath $pluginTests) -and $two) {
+    $r = Invoke-Executable -Program $pluginTests -Arguments @($sample.FullName, $two.FullName)
+    $checks = ([regex]::Matches($r.Text, '(?m)^PASS')).Count
+    Record 'plugin SDK, lifecycle and management' ($r.Code -eq 0 -and $r.Text -match 'PLUGIN REGRESSIONS PASS') "$checks assertions"
+    foreach ($line in ($r.Text -split "`n" | Where-Object { $_ -match '^FAIL' })) { Write-Host "         $line" }
+} else { Record 'plugin regression executable and fixtures available' $false 'rebuild the project' }
+$r = Invoke-Reader @('--selftest-plugins', $sample.FullName)
+Record 'bundled plugin in the distributed reader' ($r.Code -eq 0 -and $r.Text -match 'PLUGIN SELFTEST PASS') $r.Text.Trim()
+
 Write-Host "`n=== summary ===" -ForegroundColor Cyan
 $failed = @($script:Results | Where-Object { -not $_.Ok })
 foreach ($res in $script:Results) {

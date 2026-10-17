@@ -99,6 +99,8 @@ try {
         (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -eq $payloadVersion) 'Windows receives version information and an uninstall entry'
     $r = Run $exe @('--selftest',$Pdf) 'installed-reader.log'
     Check ($r.Code -eq 0 -and $r.Text -match 'SELFTEST PASS') 'installed reader passes its real 200-percent-DPI self-test'
+    $r = Run $exe @('--selftest-plugins',$Pdf) 'installed-plugin.log'
+    Check ($r.Code -eq 0 -and $r.Text -match 'PLUGIN SELFTEST PASS') 'installed reader loads and disables its bundled DLL plugin'
     Check (@(Get-ChildItem (Join-Path $testRoot 'user-data/toc-cache') -Filter '*.json').Count -gt 0) 'installed reader starts its isolated directory worker and saves the result'
     $userData = Get-Content -LiteralPath $env:PDFREADER_SETTINGS -Raw
     Set-Content -LiteralPath (Join-Path $install 'LICENSE') -Value 'old version placeholder'

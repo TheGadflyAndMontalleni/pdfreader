@@ -10,6 +10,9 @@
 #include "doc.h"
 #include "toc.h"
 #include "session.h"
+#include "pdfreader_plugin.h"
+
+namespace app { class PluginManager; }
 
 class QAction;
 class QCheckBox;
@@ -31,7 +34,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(QWidget* parent = nullptr, bool autoLoadPlugins = true);
     ~MainWindow() override;
 
     bool openDocument(const QString& path);
@@ -41,6 +44,10 @@ public:
     bool removeBookmark(int row);
     int bookmarkCount() const;
     bool jumpToBookmark(int row);
+    app::PluginManager* pluginManager() const { return plugins_.get(); }
+    pdfreader::DocumentInfo pluginDocument() const;
+    QString pluginSelectedText() const;
+    QString pluginPageText(int pageNumber) const;
 
     // Headless checks for the parts that matter: the TOC is built, every entry
     // has a target, and clicking an entry actually moves the view there.
@@ -88,7 +95,7 @@ private slots:
 
 private:
     struct DocTab;
-    void buildUi();
+    void buildUi(bool autoLoadPlugins);
     void populateToc(const pre::TocTree& tree, const pre::ResolveStats& stats);
     void setTocStatus(const QString& text, bool warning);
     void updateStatus();
@@ -229,4 +236,5 @@ private:
     QLineEdit*     findEdit_ = nullptr;
     QCheckBox*     findCase_ = nullptr;
     QLabel*        findStatus_ = nullptr;
+    std::unique_ptr<app::PluginManager> plugins_;
 };

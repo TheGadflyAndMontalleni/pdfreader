@@ -40,6 +40,7 @@ Get-FileHash .\PDFReader-Setup.exe -Algorithm SHA256
 - **快速打开**：先显示正文，再在独立进程中生成自动目录；目录按文件大小和修改时间缓存，文件变化后重建。
 - **自动目录**：优先使用 PDF 内嵌大纲；没有大纲时，尝试识别印刷目录页，再从标题排版推断。侧栏支持一键全部展开或收起。
 - **个人书签**：保存当前页、跳转、重命名、删除；按文档保存在本机，重启后仍可使用。
+- **插件扩展**：安装、启用和禁用独立 C++ / Qt DLL；可扩展菜单、侧面板、页面文字处理和阅读事件，提供 SDK 与完整示例。
 - **连续或单页阅读**：适应宽度、适应页面、页码输入、缩放输入、夜间反色。
 - **选择和查找**：跨页文字选择、复制、全文查找与命中高亮。
 - **多标签与阅读记录**：独立保存各文档的位置和阅读模式，恢复上次标签和最近文件。
@@ -60,6 +61,18 @@ Get-FileHash .\PDFReader-Setup.exe -Algorithm SHA256
 | 反色 | I |
 
 书签位于左侧“书签”标签。选中书签后点击上方“删除”，也可以右键选择“删除所选书签”，或在书签列表内按 Delete。顶部“书签”菜单同样提供删除与重命名。目录操作位于“目录”标签上方。
+
+## 插件与扩展开发
+
+打开 **插件 → 插件管理**，可以安装插件 DLL、启用或禁用插件、查看错误及打开插件目录。内置“阅读工具示例”提供复制当前页文字、添加书签和文档信息面板，默认禁用。
+
+后续功能可通过独立插件开发，无需修改阅读器核心。[下载 Plugin SDK 1.0](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/PDFReader-PluginSDK-1.0.zip)，或阅读 **[插件开发指南](docs/plugin-development.md)**，包含接口、模板、独立构建命令和生命周期约定。
+
+当前插件使用 Qt 6.8.3 / MinGW 13.1.0 / Windows x64 / Release，与宿主运行在同一进程，需使用匹配的工具链。第三方插件导致启动异常时，可运行 `pdfreader.exe --no-plugins` 后在插件管理中禁用。API 1 接口保持冻结，不兼容的变更使用新的 API/IID；工具链升级可能需要重新编译插件。
+
+## 0.3.0 更新
+
+加入原生插件机制、插件管理窗口、版本检查、独立配置及生命周期清理；提供 SDK 1.0、可独立编译的示例和跳过插件自动加载的恢复选项。详见 [发布说明](docs/release-0.3.0.md)。
 
 ## 0.2.1 更新
 
@@ -101,7 +114,7 @@ pwsh -NoProfile -File tools/make_release.ps1 `
   -InnoCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 ```
 
-生成 `dist/PDFReader-Setup.exe`、`dist/PDFReader-Portable.exe` 和 `dist/SHA256SUMS.txt`。二进制通过 GitHub Release 附件分发。已有构建可加 `-SkipBuild`，也可分别运行 `tools/make_installer.ps1` 和 `tools/make_sfx.ps1`。
+生成 `dist/PDFReader-Setup.exe`、`dist/PDFReader-Portable.exe`、`dist/PDFReader-PluginSDK-1.0.zip` 和 `dist/SHA256SUMS.txt`。二进制通过 GitHub Release 附件分发。已有构建可加 `-SkipBuild`，也可分别运行 `tools/make_installer.ps1` 和 `tools/make_sfx.ps1`。
 
 ### 验证
 

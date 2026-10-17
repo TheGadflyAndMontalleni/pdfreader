@@ -37,6 +37,7 @@
 #include "printing.h"
 #include "render.h"
 #include "session.h"
+#include "pluginmanager.h"
 
 #include <QCloseEvent>
 #include <QComboBox>
@@ -82,8 +83,8 @@ QTreeWidgetItem* MakeItem(const pre::TocNode& node, const QString& key) {
 
 }  // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    buildUi();
+MainWindow::MainWindow(QWidget* parent, bool autoLoadPlugins) : QMainWindow(parent) {
+    buildUi(autoLoadPlugins);
     const QByteArray geo = app::Session::WindowGeometry();
     if (!geo.isEmpty()) restoreGeometry(geo);
     const QByteArray sidebar = app::Session::SidebarState();
@@ -93,10 +94,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 MainWindow::~MainWindow() {
     closing_ = true;
+    plugins_.reset();
     for (auto& entry : tabs_) stopToc(entry.get());
 }
 
-void MainWindow::buildUi() {
+void MainWindow::buildUi(bool autoLoadPlugins) {
     setWindowTitle(tr("PDF Reader"));
     resize(1280, 860);
     setStyleSheet(QStringLiteral(
@@ -218,6 +220,11 @@ void MainWindow::buildUi() {
     removeBookmarkAction_->setToolTip(tr("删除选中的个人书签（选中书签后按 Delete）"));
     renameBookmarkAction_->setEnabled(false);
     removeBookmarkAction_->setEnabled(false);
+
+    auto* pluginsMenu = menuBar()->addMenu(tr("插件(&P)"));
+    pluginsMenu->setObjectName("pluginsMenu");
+    pluginsMenu->addAction(tr("插件管理…"), this, [this] { plugins_->showDialog(); })->setObjectName("managePlugins");
+    pluginsMenu->addSeparator();
 
     // ---- toolbar ----
     QToolBar* bar = addToolBar(tr("阅读工具"));
@@ -448,6 +455,7 @@ void MainWindow::buildUi() {
     connect(view_, &PdfView::configurationChanged, this, &MainWindow::updateStatus);
     connect(view_, &PdfView::selectionChanged, this, [this](bool has) {
         if (copyAction_) copyAction_->setEnabled(has);
+        if (plugins_) plugins_->notifySelectionChanged();
     });
     connect(view_, &PdfView::findMatchChanged, this, [this](int index, int total) {
         if (total <= 0) {
@@ -456,6 +464,23 @@ void MainWindow::buildUi() {
         }
         findStatus_->setText(tr("%1 / %2").arg(index + 1).arg(total));
     });
+    plugins_ = std::make_unique<app::PluginManager>(this, pluginsMenu);
+    // Plugin metadata and enabled extensions are processed after the first frame.
+    // New plugins (including the bundled example) remain disabled until chosen.
+    if (autoLoadPlugins) QTimer::singleShot(250, this, [this] { if (!closing_) plugins_->loadEnabled(); });
+}
+
+pdfreader::DocumentInfo MainWindow::pluginDocument() const {
+    const auto* entry = cur();
+    if (!entry) return {};
+    return {entry->path, QFileInfo(entry->path).fileName(), entry->index->PageCount(), view_->page() + 1};
+}
+QString MainWindow::pluginSelectedText() const { return cur() ? view_->selectedText() : QString(); }
+QString MainWindow::pluginPageText(int pageNumber) const {
+    if (!index_ || pageNumber < 1 || pageNumber > index_->PageCount()) return {};
+    QStringList lines;
+    for (const auto& line : index_->Lines(pageNumber - 1)) lines.append(QString::fromUtf8(line.text.c_str()));
+    return lines.join('\n');
 }
 
 void MainWindow::setTocStatus(const QString& text, bool warning) {
@@ -615,6 +640,7 @@ void MainWindow::bindTab(int index) {
 
     setWindowTitle(QString("%1 — PDF Reader").arg(QFileInfo(t->path).fileName()));
     updateStatus();
+    if (plugins_) plugins_->notifyDocumentChanged();
 }
 
 void MainWindow::refreshTabTitle(int index) {
@@ -814,6 +840,7 @@ void MainWindow::closeTab(int index) {
         setTocStatus(tr("打开文档后显示目录"), false);
         setWindowTitle(tr("PDF Reader"));
         updateStatus();
+        if (plugins_) plugins_->notifyDocumentChanged();
         return;
     }
     int next = std::min(index, tabCount() - 1);
@@ -997,6 +1024,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     app::Session::SetWindowGeometry(saveGeometry());
     app::Session::SetSidebarState(splitter_->saveState());
     app::Session::Flush();
+    if (plugins_) plugins_->shutdown();
     QMainWindow::closeEvent(event);
 }
 
@@ -1034,6 +1062,7 @@ void MainWindow::onTocItemClicked(QTreeWidgetItem* item, int) {
 
 void MainWindow::onPageChanged(int page) {
     updateStatus();
+    if (plugins_) plugins_->notifyPageChanged();
 }
 
 void MainWindow::onZoomChanged(double) { updateStatus(); }

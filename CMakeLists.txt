@@ -62,8 +62,9 @@ add_library(reader_ui STATIC
     src/app/printing.cpp
     src/app/session.cpp
     src/app/tocworker.cpp
+    src/app/pluginmanager.cpp
 )
-target_include_directories(reader_ui PUBLIC "${CMAKE_SOURCE_DIR}/src/app")
+target_include_directories(reader_ui PUBLIC "${CMAKE_SOURCE_DIR}/src/app" "${CMAKE_SOURCE_DIR}/sdk")
 target_link_libraries(reader_ui PUBLIC pdfcore Qt6::Widgets Qt6::PrintSupport)
 
 add_executable(pdfreader WIN32 src/app/main.cpp src/app/app.rc src/app/app.qrc)
@@ -71,3 +72,9 @@ target_link_libraries(pdfreader PRIVATE reader_ui)
 
 add_executable(reader_regressions tests/reader_regressions.cpp)
 target_link_libraries(reader_regressions PRIVATE reader_ui Qt6::Test)
+
+include(sdk/PdfReaderPlugin.cmake)
+add_subdirectory(plugins/reading_tools)
+add_subdirectory(tests/plugins)
+add_executable(plugin_regressions tests/plugin_regressions.cpp)
+target_link_libraries(plugin_regressions PRIVATE reader_ui Qt6::Test)

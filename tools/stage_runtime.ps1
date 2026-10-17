@@ -33,6 +33,9 @@ foreach ($directory in 'platforms','styles','imageformats') {
 if (-not (Test-Path -LiteralPath (Join-Path $target 'platforms/qwindows.dll'))) {
     throw 'The Windows Qt platform plugin is required.'
 }
+$readerPlugins = Join-Path $target 'reader-plugins'
+New-Item -ItemType Directory -Force -Path $readerPlugins | Out-Null
+Copy-Item -LiteralPath (Join-Path $build 'reader-plugins/reading_tools.dll') -Destination $readerPlugins -Force
 foreach ($name in 'LICENSE','THIRD_PARTY_NOTICES.md') {
     Copy-Item -LiteralPath (Join-Path $root $name) -Destination $target -Force
 }

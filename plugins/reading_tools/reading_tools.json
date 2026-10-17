@@ -1,0 +1,7 @@
+{
+    "Id": "org.pdfreader.reading-tools",
+    "Name": "阅读工具示例",
+    "Version": "1.0.0",
+    "ApiVersion": 1,
+    "Description": "演示独立插件：复制当前页文字、添加书签，以及随阅读更新的文档信息面板。"
+}

@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(PDFReaderReadingTools LANGUAGES CXX)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
+    include("${CMAKE_CURRENT_LIST_DIR}/../../sdk/PdfReaderPlugin.cmake")
+endif()
+add_pdfreader_plugin(reading_tools reading_tools.cpp reading_tools.json)

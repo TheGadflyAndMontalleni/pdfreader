@@ -1,6 +1,8 @@
 // PDF Reader — a PDF viewer whose sidebar table of contents is reconstructed
 // automatically, including for documents that ship no /Outlines.
 #include <QApplication>
+#include <QAction>
+#include <QClipboard>
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QTimer>
@@ -12,6 +14,7 @@
 #endif
 
 #include "mainwindow.h"
+#include "pluginmanager.h"
 
 // For --render-png: the raw PDFium output, without any Qt compositing.
 #include <QImage>
@@ -41,7 +44,7 @@ void PrepareTestOutput() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("PDF Reader"));
-    QApplication::setApplicationVersion(QStringLiteral("0.2.1"));
+    QApplication::setApplicationVersion(QStringLiteral("0.3.0"));
 
     // Same artwork as the .ico in the PE resource table. Windows draws the
     // taskbar button from the executable's icon, but the title bar, the
@@ -187,13 +190,45 @@ int main(int argc, char** argv) {
         QStringLiteral("Generate the automatic TOC in an isolated worker process."),
         QStringLiteral("file"));
     parser.addOption(tocWorkerOpt);
+    QCommandLineOption noPluginsOpt(QStringLiteral("no-plugins"),
+        QStringLiteral("Skip automatic plugin loading for this launch; saved preferences are retained."));
+    parser.addOption(noPluginsOpt);
+    QCommandLineOption pluginSelfTestOpt(QStringLiteral("selftest-plugins"),
+        QStringLiteral("Verify the bundled plugin, commands and UI cleanup using FILE."), QStringLiteral("file"));
+    parser.addOption(pluginSelfTestOpt);
     parser.process(app);
 
     if (parser.isSet(tocWorkerOpt)) {
         PrepareTestOutput();
         return app::RunTocWorker(parser.value(tocWorkerOpt));
     }
-    MainWindow window;
+    MainWindow window(nullptr, !parser.isSet(noPluginsOpt) && !parser.isSet(pluginSelfTestOpt));
+    if (parser.isSet(pluginSelfTestOpt)) {
+        PrepareTestOutput();
+        window.setAttribute(Qt::WA_DontShowOnScreen);
+        window.show();
+        int exitCode = 1;
+        const bool opened = window.openDocument(parser.value(pluginSelfTestOpt));
+        QTimer::singleShot(180, &app, [&] {
+            auto* manager = window.pluginManager();
+            manager->discover();
+            QString error;
+            const bool enabled = manager->setEnabled("org.pdfreader.reading-tools", true, &error);
+            auto* copy = window.findChild<QAction*>("plugin:org.pdfreader.reading-tools/copy-page");
+            const auto text = window.pluginPageText(window.pluginDocument().currentPage);
+            if (copy) copy->trigger();
+            const bool copied = copy && !text.isEmpty() && QApplication::clipboard()->text() == text;
+            const bool disabled = manager->setEnabled("org.pdfreader.reading-tools", false, &error) &&
+                !window.findChild<QAction*>("plugin:org.pdfreader.reading-tools/copy-page");
+            exitCode = opened && enabled && copied && disabled ? 0 : 1;
+            std::printf("PLUGIN SELFTEST %s (open=%d load=%d text=%d cleanup=%d) %s\n",
+                exitCode == 0 ? "PASS" : "FAIL", opened, enabled, copied, disabled, error.toUtf8().constData());
+            std::fflush(stdout);
+            app.quit();
+        });
+        app.exec();
+        return exitCode;
+    }
 
     // Pure PDFium render, bypassing the view entirely: this is what the page
     // looks like before Qt composites it onto the screen.
