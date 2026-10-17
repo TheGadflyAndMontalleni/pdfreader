@@ -11,7 +11,7 @@ set(CMAKE_AUTORCC ON)
 set(QT_PREFIX  "${CMAKE_SOURCE_DIR}/tools"        CACHE PATH "Qt prefix")
 set(PDFIUM_DIR "${CMAKE_SOURCE_DIR}/tools/pdfium" CACHE PATH "PDFium prefix")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport Test
              PATHS "${QT_PREFIX}/lib/cmake" NO_DEFAULT_PATH)
 
 # PDFium ships an MSVC import library; tools/make_pdfium_implib.ps1 converts it
@@ -70,4 +70,4 @@ add_executable(pdfreader WIN32 src/app/main.cpp src/app/app.rc src/app/app.qrc)
 target_link_libraries(pdfreader PRIVATE reader_ui)
 
 add_executable(reader_regressions tests/reader_regressions.cpp)
-target_link_libraries(reader_regressions PRIVATE reader_ui)
+target_link_libraries(reader_regressions PRIVATE reader_ui Qt6::Test)

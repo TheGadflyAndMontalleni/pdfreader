@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QAction>
+#include <QContextMenuEvent>
 #include <QDir>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -7,6 +8,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QListWidget>
+#include <QMenu>
+#include <QMenuBar>
 #include <QPointer>
 #include <QProcess>
 #include <QScrollBar>
@@ -17,6 +20,8 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QToolButton>
+#include <QTest>
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -181,8 +186,72 @@ int main(int argc, char** argv) {
     check(window.openDocument(args[1]) && window.tabTocNodes(0) > 0,
           "reopening uses the persisted TOC cache without a worker scan");
     check(window.bookmarkCount() == 1, "bookmarks survive closing and reopening a document");
-    check(window.removeBookmark(0) && app::Session::LoadBookmarks(args[1]).isEmpty(),
-          "deleting a bookmark updates persistent storage");
+    window.showSidebarPage(1);
+    auto* bookmarkTree = window.findChild<QTreeWidget*>("personalBookmarks");
+    bookmarkTree->setCurrentItem(bookmarkTree->topLevelItem(0));
+    QMenu* bookmarkMenu = nullptr;
+    for (auto* action : window.menuBar()->actions())
+        if (action->text().contains(QString::fromUtf8("书签"))) bookmarkMenu = action->menu();
+    auto* deleteBookmark = window.findChild<QAction*>("removeBookmark");
+    check(bookmarkMenu && deleteBookmark && bookmarkMenu->actions().contains(deleteBookmark),
+          "the top Bookmarks menu exposes deletion of the selected bookmark");
+    auto* narrowSplitter = window.findChild<QSplitter*>();
+    narrowSplitter->setSizes({220, 1060}); settle(180);
+    QToolButton* deleteButton = nullptr;
+    for (auto* button : navigation->widget(1)->findChildren<QToolButton*>())
+        if (button->defaultAction() && button->defaultAction()->text().contains(QString::fromUtf8("删除")))
+            deleteButton = button;
+    check(deleteButton && deleteButton->isVisible() &&
+          navigation->widget(1)->rect().contains(deleteButton->mapTo(navigation->widget(1), QPoint(0, 0))) &&
+          navigation->widget(1)->rect().contains(deleteButton->mapTo(navigation->widget(1), deleteButton->rect().bottomRight())),
+          "the delete button remains visible at the minimum 220-pixel sidebar width");
+    if (bookmarkMenu && deleteBookmark) {
+        bookmarkMenu->popup(window.mapToGlobal(QPoint(200, 60)));
+        app.processEvents();
+        QTest::mouseClick(bookmarkMenu, Qt::LeftButton, Qt::NoModifier,
+                         bookmarkMenu->actionGeometry(deleteBookmark).center());
+    }
+    check(window.bookmarkCount() == 0 && app::Session::LoadBookmarks(args[1]).isEmpty(),
+          "clicking Delete in the Bookmarks menu removes the bookmark and saves the change");
+    view->setPage(0); window.addBookmark(QString::fromUtf8("保留的书签"));
+    view->setPage(1); window.addBookmark(QString::fromUtf8("待删除的书签"));
+    bookmarkTree->setCurrentItem(bookmarkTree->topLevelItem(1));
+    if (deleteButton) QTest::mouseClick(deleteButton, Qt::LeftButton);
+    check(window.bookmarkCount() == 1 && bookmarkTree->currentItem() == bookmarkTree->topLevelItem(0) &&
+          deleteBookmark && deleteBookmark->isEnabled() && app::Session::LoadBookmarks(args[1]).size() == 1,
+          "the visible Delete button removes only the selection and selects the remaining bookmark");
+    QApplication::setActiveWindow(&window);
+    bookmarkTree->setFocus(); app.processEvents();
+    QTest::keyClick(bookmarkTree, Qt::Key_Delete);
+    check(window.bookmarkCount() == 0 && app::Session::LoadBookmarks(args[1]).isEmpty(),
+          "the Delete key removes a bookmark when the bookmark list has focus");
+    check(deleteBookmark && !deleteBookmark->isEnabled(), "Delete is disabled after the last bookmark is removed");
+    view->setPage(0); window.addBookmark(QString::fromUtf8("保留的书签"));
+    view->setPage(1); window.addBookmark(QString::fromUtf8("右键删除"));
+    bookmarkTree->setCurrentItem(bookmarkTree->topLevelItem(0));
+    app.processEvents();
+    const QPoint contextPosition = bookmarkTree->visualItemRect(bookmarkTree->topLevelItem(1)).center();
+    bool contextSelectedCorrectly = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        contextSelectedCorrectly = menu && deleteBookmark && menu->actions().contains(deleteBookmark) &&
+            bookmarkTree->currentItem() == bookmarkTree->topLevelItem(1);
+        if (contextSelectedCorrectly)
+            QTest::mouseClick(menu, Qt::LeftButton, Qt::NoModifier, menu->actionGeometry(deleteBookmark).center());
+        else if (menu) menu->close();
+    });
+    QContextMenuEvent contextEvent(QContextMenuEvent::Mouse, contextPosition,
+                                   bookmarkTree->viewport()->mapToGlobal(contextPosition));
+    QApplication::sendEvent(bookmarkTree->viewport(), &contextEvent);
+    app.processEvents();
+    check(contextSelectedCorrectly && window.bookmarkCount() == 1 &&
+          app::Session::LoadBookmarks(args[1]).size() == 1 &&
+          app::Session::LoadBookmarks(args[1])[0].title == QString::fromUtf8("保留的书签"),
+          "the right-click menu deletes the clicked bookmark rather than the previously selected row");
+    view->setFocus(); app.processEvents();
+    QTest::keyClick(view, Qt::Key_Delete);
+    check(window.bookmarkCount() == 1, "Delete outside the bookmark list leaves bookmarks intact");
+    window.removeBookmark(0);
     window.closeDocTab(0);
 
     // Opening two files in one event-loop turn must not restore A's state to B.

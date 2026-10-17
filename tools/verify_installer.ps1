@@ -93,7 +93,10 @@ try {
     $start = $shell.CreateShortcut((Join-Path $install 'test-shortcuts/PDF Reader.lnk'))
     $desktop = $shell.CreateShortcut((Join-Path $install 'test-shortcuts/PDF Reader Desktop.lnk'))
     Check ($start.TargetPath -eq $exe -and $desktop.TargetPath -eq $exe) 'start-menu and desktop shortcuts target the installed reader'
-    Check ((Get-ItemProperty -LiteralPath $uninstallKey).DisplayVersion -eq '0.2.0') 'Windows receives version information and an uninstall entry'
+    $payloadVersion = (Get-Item -LiteralPath (Join-Path $payload 'pdfreader.exe')).VersionInfo.ProductVersion
+    $installerVersion = ($payloadVersion -split '\.')[0..2] -join '.'
+    Check ((Get-ItemProperty -LiteralPath $uninstallKey).DisplayVersion -eq $installerVersion -and
+        (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -eq $payloadVersion) 'Windows receives version information and an uninstall entry'
     $r = Run $exe @('--selftest',$Pdf) 'installed-reader.log'
     Check ($r.Code -eq 0 -and $r.Text -match 'SELFTEST PASS') 'installed reader passes its real 200-percent-DPI self-test'
     Check (@(Get-ChildItem (Join-Path $testRoot 'user-data/toc-cache') -Filter '*.json').Count -gt 0) 'installed reader starts its isolated directory worker and saves the result'

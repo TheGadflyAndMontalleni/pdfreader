@@ -28,6 +28,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -196,10 +197,27 @@ void MainWindow::buildUi() {
                         &MainWindow::findPrev);
 
     QMenu* bookmarksMenu = menuBar()->addMenu(tr("书签(&B)"));
+    bookmarksMenu->setObjectName("bookmarksMenu");
     addBookmarkAction_ = bookmarksMenu->addAction(tr("添加书签"),
         QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { addBookmark(); });
     addBookmarkAction_->setObjectName("addBookmark");
     bookmarksMenu->addAction(tr("显示书签"), this, [this] { showSidebarPage(1); });
+    bookmarksMenu->addSeparator();
+    renameBookmarkAction_ = bookmarksMenu->addAction(tr("重命名书签…"), this, &MainWindow::editSelectedBookmark);
+    renameBookmarkAction_->setObjectName("renameBookmark");
+    renameBookmarkAction_->setIconText(tr("重命名"));
+    renameBookmarkAction_->setShortcut(QKeySequence(Qt::Key_F2));
+    renameBookmarkAction_->setShortcutContext(Qt::WidgetShortcut);
+    removeBookmarkAction_ = bookmarksMenu->addAction(tr("删除所选书签"), this, [this] {
+        if (bookmarkTree_->currentItem()) removeBookmark(bookmarkTree_->indexOfTopLevelItem(bookmarkTree_->currentItem()));
+    });
+    removeBookmarkAction_->setObjectName("removeBookmark");
+    removeBookmarkAction_->setIconText(tr("删除"));
+    removeBookmarkAction_->setShortcut(QKeySequence(Qt::Key_Delete));
+    removeBookmarkAction_->setShortcutContext(Qt::WidgetShortcut);
+    removeBookmarkAction_->setToolTip(tr("删除选中的个人书签（选中书签后按 Delete）"));
+    renameBookmarkAction_->setEnabled(false);
+    removeBookmarkAction_->setEnabled(false);
 
     // ---- toolbar ----
     QToolBar* bar = addToolBar(tr("阅读工具"));
@@ -325,13 +343,20 @@ void MainWindow::buildUi() {
     auto* bookmarksPage = new QWidget(sidebar);
     auto* bookmarkLayout = new QVBoxLayout(bookmarksPage);
     bookmarkLayout->setContentsMargins(10, 8, 10, 6);
-    auto* bookmarkTools = new QToolBar(bookmarksPage);
-    bookmarkTools->addAction(addBookmarkAction_);
-    renameBookmarkAction_ = bookmarkTools->addAction(tr("重命名"), this, &MainWindow::editSelectedBookmark);
-    removeBookmarkAction_ = bookmarkTools->addAction(tr("删除"), this, [this] {
-        if (bookmarkTree_->currentItem()) removeBookmark(bookmarkTree_->indexOfTopLevelItem(bookmarkTree_->currentItem()));
-    });
-    bookmarkLayout->addWidget(bookmarkTools);
+    // A standalone QToolBar can hide its last action without exposing an
+    // overflow button. Keep every bookmark operation visible in a narrow pane.
+    auto* bookmarkTools = new QHBoxLayout;
+    bookmarkTools->setContentsMargins(0, 0, 0, 0);
+    bookmarkTools->setSpacing(4);
+    for (auto* action : {addBookmarkAction_, renameBookmarkAction_, removeBookmarkAction_}) {
+        auto* button = new QToolButton(bookmarksPage);
+        button->setDefaultAction(action);
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        button->setStyleSheet("QToolButton { padding: 5px 4px; }");
+        bookmarkTools->addWidget(button);
+    }
+    bookmarkLayout->addLayout(bookmarkTools);
     bookmarkEmpty_ = new QLabel(tr("还没有书签\n阅读时按 Ctrl+D 保存当前页"), bookmarksPage);
     bookmarkEmpty_->setAlignment(Qt::AlignCenter);
     bookmarkEmpty_->setWordWrap(true);
@@ -342,6 +367,9 @@ void MainWindow::buildUi() {
     bookmarkTree_->setHeaderLabels({tr("书签"), tr("页码")});
     bookmarkTree_->setRootIsDecorated(false);
     bookmarkTree_->setUniformRowHeights(true);
+    bookmarkTree_->addAction(renameBookmarkAction_);
+    bookmarkTree_->addAction(removeBookmarkAction_);
+    bookmarkTree_->setContextMenuPolicy(Qt::CustomContextMenu);
     bookmarkTree_->header()->setStretchLastSection(false);
     bookmarkTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     bookmarkTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -350,6 +378,13 @@ void MainWindow::buildUi() {
         jumpToBookmark(bookmarkTree_->indexOfTopLevelItem(item));
     });
     connect(bookmarkTree_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem*, int) { editSelectedBookmark(); });
+    connect(bookmarkTree_, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) {
+        bookmarkTree_->setCurrentItem(bookmarkTree_->itemAt(position));
+        QMenu menu(bookmarkTree_);
+        menu.addAction(renameBookmarkAction_);
+        menu.addAction(removeBookmarkAction_);
+        menu.exec(bookmarkTree_->viewport()->mapToGlobal(position));
+    });
     connect(bookmarkTree_, &QTreeWidget::itemSelectionChanged, this, [this] {
         const bool selected = bookmarkTree_->currentItem() != nullptr;
         renameBookmarkAction_->setEnabled(selected);
@@ -730,6 +765,8 @@ bool MainWindow::removeBookmark(int row) {
     entry->bookmarks.removeAt(row);
     app::Session::SaveBookmarks(entry->path, entry->bookmarks);
     refreshBookmarks();
+    if (!entry->bookmarks.isEmpty())
+        bookmarkTree_->setCurrentItem(bookmarkTree_->topLevelItem(std::min(row, int(entry->bookmarks.size()) - 1)));
     return true;
 }
 

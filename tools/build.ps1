@@ -32,6 +32,7 @@ foreach ($dll in 'libstdc++-6.dll', 'libgcc_s_seh-1.dll', 'libwinpthread-1.dll')
 Copy-Item (Join-Path $root 'tools\pdfium\bin\pdfium.dll') $build -Force
 $qtCore = Join-Path $qtbin 'Qt6Core.dll'
 if (Test-Path $qtCore) { Copy-Item $qtCore $build -Force }
+Copy-Item (Join-Path $qtbin 'Qt6Test.dll') $build -Force
 
 # The GUI app additionally needs the Qt platform plugin (qwindows.dll) and the
 # Widgets/Gui libraries; windeployqt resolves that set for us.
