@@ -74,6 +74,8 @@ Get-FileHash .\PDFReader-Setup.exe -Algorithm SHA256
 
 打开 **插件 → 插件管理**，可以安装插件 DLL、启用或禁用插件、查看错误及打开插件目录。内置“阅读工具示例”提供复制当前页文字、添加书签和文档信息面板，默认禁用。
 
+**[DeepSeek 生词翻译插件](plugins/deepseek_translate/README.md)**：选中单词或短语后按 **Alt+T**，自动识别语言并默认译为中文；支持可选的自动划词翻译。独立安装 DLL，在插件设置中填写自己的 DeepSeek API Key 即可，兼容阅读器 0.3.0 / 0.4.0。
+
 后续功能可通过独立插件开发，无需修改阅读器核心。[下载 Plugin SDK 1.0](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/PDFReader-PluginSDK-1.0.zip)，或阅读 **[插件开发指南](docs/plugin-development.md)**，包含接口、模板、独立构建命令和生命周期约定。
 
 当前插件使用 Qt 6.8.3 / MinGW 13.1.0 / Windows x64 / Release，与宿主运行在同一进程，需使用匹配的工具链。第三方插件导致启动异常时，可运行 `pdfreader.exe --no-plugins` 后在插件管理中禁用。API 1 接口保持冻结，不兼容的变更使用新的 API/IID；工具链升级可能需要重新编译插件。
