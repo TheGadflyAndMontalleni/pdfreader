@@ -239,6 +239,21 @@ if ((Test-Path -LiteralPath $pluginTests) -and $two) {
 $r = Invoke-Reader @('--selftest-plugins', $sample.FullName)
 Record 'bundled plugin in the distributed reader' ($r.Code -eq 0 -and $r.Text -match 'PLUGIN SELFTEST PASS') $r.Text.Trim()
 
+Write-Host "`n=== 9. anchored comments ===" -ForegroundColor Cyan
+$commentTests = Join-Path $BuildDir 'comment_regressions.exe'
+if (Test-Path -LiteralPath $commentTests) {
+    $previousScale = $env:QT_SCALE_FACTOR
+    try {
+        foreach ($scale in @('1', '1.5', '2')) {
+            $env:QT_SCALE_FACTOR = $scale
+            $r = Invoke-Executable -Program $commentTests -Arguments @()
+            $checks = ([regex]::Matches($r.Text, '(?m)^PASS')).Count
+            Record "anchored comments at ${scale}x" ($r.Code -eq 0 -and $r.Text -match 'COMMENT REGRESSIONS PASS') "$checks assertions"
+            foreach ($line in ($r.Text -split "`n" | Where-Object { $_ -match '^FAIL' })) { Write-Host "         $line" }
+        }
+    } finally { $env:QT_SCALE_FACTOR = $previousScale }
+} else { Record 'comment regression executable available' $false 'rebuild the project' }
+
 Write-Host "`n=== summary ===" -ForegroundColor Cyan
 $failed = @($script:Results | Where-Object { -not $_.Ok })
 foreach ($res in $script:Results) {

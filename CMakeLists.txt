@@ -63,6 +63,8 @@ add_library(reader_ui STATIC
     src/app/session.cpp
     src/app/tocworker.cpp
     src/app/pluginmanager.cpp
+    src/app/comments.cpp
+    src/app/commentpanel.cpp
 )
 target_include_directories(reader_ui PUBLIC "${CMAKE_SOURCE_DIR}/src/app" "${CMAKE_SOURCE_DIR}/sdk")
 target_link_libraries(reader_ui PUBLIC pdfcore Qt6::Widgets Qt6::PrintSupport)
@@ -72,6 +74,9 @@ target_link_libraries(pdfreader PRIVATE reader_ui)
 
 add_executable(reader_regressions tests/reader_regressions.cpp)
 target_link_libraries(reader_regressions PRIVATE reader_ui Qt6::Test)
+
+add_executable(comment_regressions tests/comment_regressions.cpp)
+target_link_libraries(comment_regressions PRIVATE reader_ui Qt6::Test)
 
 include(sdk/PdfReaderPlugin.cmake)
 add_subdirectory(plugins/reading_tools)

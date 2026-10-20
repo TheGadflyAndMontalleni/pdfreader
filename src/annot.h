@@ -1,17 +1,9 @@
 // Text markup: highlight / underline / strikeout over a text selection.
 //
-// Why these are baked into the page content instead of created as PDF
-// annotations:
-//
-//   A text-markup annotation renders from its /QuadPoints array. PDFium's
-//   public annotation API can set /Rect and /C but has no quadpoints setter, so
-//   an annotation created that way is present in the file and invisible in
-//   every viewer -- a feature that passes a naive test and does nothing for the
-//   reader. Drawing the mark as real page content renders everywhere, survives
-//   saving, and can be verified at the pixel level.
-//
-// The trade-off is honest and worth stating: these marks are one-way. They are
-// not interactive annotations that another viewer can select, edit or delete.
+// This legacy markup path draws directly into the page content. These marks
+// are one-way after saving, rather than independently editable annotations.
+// Anchored margin comments use PDFium's native highlight annotations and
+// QuadPoints instead; see app/comments.h.
 #pragma once
 
 #include <string>

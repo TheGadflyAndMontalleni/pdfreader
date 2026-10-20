@@ -20,6 +20,7 @@
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSplitter>
@@ -30,6 +31,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QUuid>
 #include <QVBoxLayout>
 
 #include "annot.h"
@@ -38,6 +40,8 @@
 #include "render.h"
 #include "session.h"
 #include "pluginmanager.h"
+#include "commentpanel.h"
+#include "fpdf_save.h"
 
 #include <QCloseEvent>
 #include <QComboBox>
@@ -94,6 +98,7 @@ MainWindow::MainWindow(QWidget* parent, bool autoLoadPlugins) : QMainWindow(pare
 
 MainWindow::~MainWindow() {
     closing_ = true;
+    flushComments();
     plugins_.reset();
     for (auto& entry : tabs_) stopToc(entry.get());
 }
@@ -192,6 +197,14 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     markupMenu_->addSeparator();
     markupMenu_->addAction(tr("撤销上一处标注"), QKeySequence(Qt::CTRL | Qt::Key_Z), this,
                            &MainWindow::undoMarkup);
+    newCommentAction_ = markupMenu_->addAction(tr("新建批注"),
+        QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_M), this, [this] { addComment(); });
+    newCommentAction_->setObjectName("newComment");
+    newCommentAction_->setToolTip(tr("选中文字，在正文旁写下批注（Ctrl+Alt+M）"));
+    showCommentsAction_ = viewMenu->addAction(tr("批注侧栏"));
+    showCommentsAction_->setObjectName("showComments");
+    showCommentsAction_->setCheckable(true);
+    showCommentsAction_->setIconText(tr("批注"));
     editMenu->addSeparator();
     editMenu->addAction(tr("查找…"), QKeySequence::Find, this, &MainWindow::showFindBar);
     editMenu->addAction(tr("查找下一个"), QKeySequence(Qt::Key_F3), this, &MainWindow::findNext);
@@ -288,6 +301,9 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     continuousAction_->setObjectName("continuousView");
     bar->addAction(tr("查找"), this, &MainWindow::showFindBar);
     bar->addAction(addBookmarkAction_);
+    bar->addSeparator();
+    bar->addAction(newCommentAction_);
+    bar->addAction(showCommentsAction_);
 
     // ---- find bar (hidden until Ctrl+F) ----
     addToolBarBreak();
@@ -408,9 +424,48 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     // pages, so there is no outer QScrollArea to nest it in.
     view_ = new PdfView(this);
 
+    // Keep the existing TOC splitter state compatible. A nested reading
+    // splitter gives the margin its own independently resizable width.
+    commentPanel_ = new CommentPanel(this);
+    commentPanel_->hide();
+    readingSplitter_ = new QSplitter(Qt::Horizontal, this);
+    readingSplitter_->setObjectName("readingSplitter");
+    readingSplitter_->addWidget(view_);
+    readingSplitter_->addWidget(commentPanel_);
+    readingSplitter_->setStretchFactor(0, 1);
+    readingSplitter_->setStretchFactor(1, 0);
+    readingSplitter_->setChildrenCollapsible(false);
+    readingSplitter_->setSizes({660, 320});
+    connect(showCommentsAction_, &QAction::toggled, this, [this](bool show) {
+        commentPanel_->setVisible(show && document_);
+    });
+    connect(commentPanel_, &CommentPanel::closeRequested, this, [this] { showCommentsAction_->setChecked(false); });
+    connect(commentPanel_, &CommentPanel::addRequested, this, [this] { addComment(); });
+    connect(commentPanel_, &CommentPanel::activated, this, [this](const QString& id) { activateComment(id, false); });
+    connect(commentPanel_, &CommentPanel::navigateRequested, this, [this](const QString& id) { activateComment(id); });
+    connect(commentPanel_, &CommentPanel::edited, this, [this](const QString& id, const QString& text) { editComment(id, text); });
+    connect(commentPanel_, &CommentPanel::removeRequested, this, [this](const QString& id) { removeComment(id); });
+    connect(view_, &PdfView::newCommentRequested, this, [this] { addComment(); });
+    connect(view_, &PdfView::commentActivated, this, [this](const QString& id) { activateComment(id, false, true); });
+    commentSaveTimer_ = new QTimer(this);
+    commentSaveTimer_->setSingleShot(true); commentSaveTimer_->setInterval(350);
+    connect(commentSaveTimer_, &QTimer::timeout, this, [this] { flushComments(); });
+    view_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(view_, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) {
+        QMenu menu(view_);
+        menu.addAction(copyAction_);
+        menu.addSeparator();
+        menu.addAction(newCommentAction_);
+        menu.addAction(showCommentsAction_);
+        menu.addSeparator();
+        auto* highlight = menu.addAction(tr("高亮所选文字"), this, [this] { applyMarkup(0); });
+        highlight->setEnabled(view_->hasSelection());
+        menu.exec(view_->viewport()->mapToGlobal(position));
+    });
+
     splitter_ = new QSplitter(Qt::Horizontal, this);
     splitter_->addWidget(sidebar);
-    splitter_->addWidget(view_);
+    splitter_->addWidget(readingSplitter_);
     splitter_->setStretchFactor(0, 0);
     splitter_->setStretchFactor(1, 1);
     sidebar->setMinimumWidth(220);
@@ -455,6 +510,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     connect(view_, &PdfView::configurationChanged, this, &MainWindow::updateStatus);
     connect(view_, &PdfView::selectionChanged, this, [this](bool has) {
         if (copyAction_) copyAction_->setEnabled(has);
+        newCommentAction_->setEnabled(document_ && has);
         if (plugins_) plugins_->notifySelectionChanged();
     });
     connect(view_, &PdfView::findMatchChanged, this, [this](int index, int total) {
@@ -524,10 +580,32 @@ bool MainWindow::openDocument(const QString& path) {
     }
 
     entry->path  = path;
+    entry->commentSourceSize = QFileInfo(path).size();
+    entry->commentSourceModified = QFileInfo(path).lastModified().toMSecsSinceEpoch();
     entry->index = std::make_unique<pre::PageIndex>(entry->doc->handle());
 
     entry->id = ++nextDocumentId_;
     entry->bookmarks = app::Session::LoadBookmarks(path);
+    entry->comments = app::ReadPdfComments(entry->doc->handle());
+    if (const auto savedComments = app::LoadLocalComments(path, entry->index->PageCount())) {
+        // Reconcile our embedded annotations with the latest local snapshot.
+        // Deleted comments stay deleted, including after reopening an export.
+        const auto embedded = entry->comments;
+        for (const auto& c : embedded) app::RemovePdfComment(entry->doc->handle(), c);
+        entry->comments.clear();
+        bool restored = true;
+        for (const auto& c : *savedComments) {
+            if (app::AddPdfComment(entry->doc->handle(), c)) entry->comments.push_back(c);
+            else { restored = false; break; }
+        }
+        if (!restored) {
+            for (const auto& c : entry->comments) app::RemovePdfComment(entry->doc->handle(), c);
+            entry->comments.clear();
+            for (const auto& c : embedded)
+                if (app::AddPdfComment(entry->doc->handle(), c)) entry->comments.push_back(c);
+            statusBar()->showMessage(tr("部分本机批注无法恢复，已保留文件中的批注"), 8000);
+        }
+    }
     entry->bookmarks.erase(std::remove_if(entry->bookmarks.begin(), entry->bookmarks.end(),
         [&entry](const app::Bookmark& b) { return b.page >= entry->index->PageCount(); }), entry->bookmarks.end());
     const app::DocState saved = app::Session::LoadDocState(path);
@@ -601,6 +679,7 @@ void MainWindow::stashActiveState() {
 void MainWindow::activateTab(int index) {
     if (index < 0 || index >= tabCount()) return;
     if (index == activeTab_) return;
+    flushComments();
     stashActiveState();
 
     activeTab_ = index;
@@ -631,6 +710,8 @@ void MainWindow::bindTab(int index) {
         view_->setZoom(t->zoom);
     }
     if (t->page > 0 && t->page < index_->PageCount()) view_->setPage(t->page);
+    refreshComments();
+    commentPanel_->setVisible(showCommentsAction_->isChecked());
 
     // Find results belong to a document, not to the window.
     view_->clearFindResults();
@@ -814,6 +895,10 @@ void MainWindow::editSelectedBookmark() {
 
 void MainWindow::closeTab(int index) {
     if (index < 0 || index >= tabCount()) return;
+    if (!flushComments()) {
+        QMessageBox::warning(this, tr("批注尚未保存"), tr("无法保存本机批注，请先使用「文件 → 另存为」保存 PDF，再关闭文档。"));
+        return;
+    }
     stashActiveState();
     DocTab* active = cur();
     DocTab* removed = tab(index);
@@ -836,6 +921,8 @@ void MainWindow::closeTab(int index) {
         currentPath_.clear();
         tocTree_->clear();
         refreshBookmarks();
+        refreshComments();
+        commentPanel_->hide();
         tabBar_->hide();
         setTocStatus(tr("打开文档后显示目录"), false);
         setWindowTitle(tr("PDF Reader"));
@@ -1005,6 +1092,11 @@ void MainWindow::openRecent(const QString& path) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (!flushComments()) {
+        QMessageBox::warning(this, tr("批注尚未保存"), tr("无法保存本机批注，请先使用「文件 → 另存为」保存 PDF，再退出。"));
+        event->ignore();
+        return;
+    }
     stashActiveState();
     QStringList open;
     for (int i = 0; i < tabCount(); ++i) {
@@ -1127,13 +1219,154 @@ void MainWindow::saveDocumentAs() {
                                                       tr("PDF 文档 (*.pdf)"));
     if (path.isEmpty()) return;
 
-    if (!pre::SaveDocumentToFile(document_->handle(),
-                                 path.toLocal8Bit().constData())) {
+    if (!saveDocumentToPath(path)) {
         QMessageBox::warning(this, tr("保存失败"), tr("无法写入 %1").arg(path));
         return;
     }
     pre::ResetMarkupState();
     statusBar()->showMessage(tr("已保存到 %1").arg(path), 6000);
+}
+
+bool MainWindow::saveDocumentToPath(const QString& path) {
+    if (!document_ || path.isEmpty()) return false;
+    // QSaveFile provides Unicode paths and atomic replacement: a failed write
+    // cannot truncate an existing original or exported PDF.
+    QSaveFile output(path);
+    if (!output.open(QIODevice::WriteOnly)) return false;
+    struct Writer {
+        FPDF_FILEWRITE base;
+        QSaveFile* file;
+    } writer;
+    writer.base.version = 1;
+    writer.base.WriteBlock = [](FPDF_FILEWRITE* self, const void* data, unsigned long size) -> int {
+        auto* w = reinterpret_cast<Writer*>(self);
+        return w->file->write(static_cast<const char*>(data), size) == qint64(size);
+    };
+    writer.file = &output;
+    if (!FPDF_SaveAsCopy(document_->handle(), &writer.base, 0)) return false;
+    if (!output.commit()) return false;
+    // Re-stamp local state when the user chose to overwrite the source.
+    if (QFileInfo(path).canonicalFilePath() == QFileInfo(currentPath_).canonicalFilePath()) {
+        cur()->commentSourceSize = QFileInfo(currentPath_).size();
+        cur()->commentSourceModified = QFileInfo(currentPath_).lastModified().toMSecsSinceEpoch();
+        cur()->commentsDirty = true;
+        flushComments();
+    }
+    // A successful PDF export is also a durable fallback if local settings
+    // cannot be written. Never strand the user in a close-warning loop.
+    if (!flushComments()) {
+        cur()->commentsDirty = false;
+        commentPanel_->setSaveState(tr("批注已保存到 PDF · 本机自动保存不可用"));
+    }
+    return true;
+}
+
+QVector<app::Comment> MainWindow::comments() const { return cur() ? cur()->comments : QVector<app::Comment>{}; }
+
+void MainWindow::refreshComments() {
+    auto* entry = cur();
+    const auto list = comments();
+    commentPanel_->setComments(list);
+    view_->setComments(list);
+    if (entry) {
+        view_->setActiveComment(entry->activeComment);
+        commentPanel_->setActiveComment(entry->activeComment);
+    }
+    commentPanel_->setSaveState(entry && entry->commentsDirty ? tr("正在保存批注…") :
+        tr("批注自动保存在本机 · 另存 PDF 可随文件分享"));
+}
+
+bool MainWindow::flushComments() {
+    bool ok = true;
+    for (const auto& entry : tabs_) {
+        if (!entry->commentsDirty) continue;
+        if (app::SaveLocalComments(entry->path, entry->comments, entry->commentSourceSize,
+            entry->commentSourceModified)) entry->commentsDirty = false;
+        else ok = false;
+    }
+    if (commentPanel_) commentPanel_->setSaveState(ok ? tr("已自动保存在本机 · 另存 PDF 可随文件分享") :
+        tr("本机保存失败，请另存 PDF 保留批注"));
+    return ok;
+}
+
+bool MainWindow::addComment(const QString& text) {
+    auto* entry = cur();
+    if (!entry || !view_->hasSelection()) {
+        statusBar()->showMessage(tr("先拖动选中正文中的文字，再新建批注（Ctrl+Alt+M）"), 5000);
+        return false;
+    }
+    app::Comment c;
+    c.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    c.quote = view_->selectedText(); c.text = text;
+    c.anchors = view_->selectionRectsByPage();
+    c.created = c.modified = QDateTime::currentDateTimeUtc();
+    if (!app::AddPdfComment(document_->handle(), c)) {
+        statusBar()->showMessage(tr("无法为这段文字添加批注"), 5000); return false;
+    }
+    entry->comments.push_back(c);
+    std::stable_sort(entry->comments.begin(), entry->comments.end(), [](const app::Comment& a, const app::Comment& b) {
+        if (a.anchors.begin()->first != b.anchors.begin()->first) return a.anchors.begin()->first < b.anchors.begin()->first;
+        return a.anchors.begin()->second.front().top > b.anchors.begin()->second.front().top;
+    });
+    entry->activeComment = c.id; entry->commentsDirty = true;
+    view_->clearSelection();
+    view_->invalidateRenderedPages();
+    refreshComments();
+    activateComment(c.id, true, true);
+    flushComments();
+    return true;
+}
+
+bool MainWindow::editComment(const QString& id, const QString& text) {
+    auto* entry = cur();
+    if (!entry) return false;
+    for (auto& c : entry->comments) {
+        if (c.id != id) continue;
+        if (c.text == text) return true;
+        auto changed = c;
+        changed.text = text; changed.modified = QDateTime::currentDateTimeUtc();
+        if (!app::UpdatePdfComment(document_->handle(), changed)) {
+            commentPanel_->setSaveState(tr("批注更新失败，请保留文字后重试")); return false;
+        }
+        c = std::move(changed);
+        entry->commentsDirty = true;
+        commentPanel_->setSaveState(tr("正在保存批注…"));
+        commentSaveTimer_->start();
+        return true;
+    }
+    return false;
+}
+
+bool MainWindow::removeComment(const QString& id) {
+    auto* entry = cur();
+    if (!entry) return false;
+    for (auto it = entry->comments.begin(); it != entry->comments.end(); ++it) {
+        if (it->id != id) continue;
+        if (!app::RemovePdfComment(document_->handle(), *it)) {
+            statusBar()->showMessage(tr("删除批注失败"), 5000); return false;
+        }
+        entry->comments.erase(it);
+        if (entry->activeComment == id) entry->activeComment.clear();
+        entry->commentsDirty = true;
+        view_->invalidateRenderedPages();
+        refreshComments();
+        flushComments();
+        return true;
+    }
+    return false;
+}
+
+bool MainWindow::activateComment(const QString& id, bool navigate, bool focusEditor) {
+    auto* entry = cur();
+    if (!entry) return false;
+    if (std::none_of(entry->comments.begin(), entry->comments.end(),
+        [&](const app::Comment& c) { return c.id == id; })) return false;
+    entry->activeComment = id;
+    showCommentsAction_->setChecked(true);
+    view_->setActiveComment(id);
+    if (navigate) view_->goToComment(id);
+    commentPanel_->setActiveComment(id, focusEditor);
+    return true;
 }
 
 QImage MainWindow::viewportImage() {
@@ -1223,6 +1456,8 @@ void MainWindow::onLastPage() { view_->goToLastPage(); }
 
 void MainWindow::updateStatus() {
     const bool loaded = document_ != nullptr;
+    newCommentAction_->setEnabled(loaded && view_->hasSelection());
+    showCommentsAction_->setEnabled(loaded);
     addBookmarkAction_->setEnabled(loaded);
     pageEdit_->setEnabled(loaded);
     zoomBox_->setEnabled(loaded);

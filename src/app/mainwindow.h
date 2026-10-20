@@ -10,6 +10,7 @@
 #include "doc.h"
 #include "toc.h"
 #include "session.h"
+#include "comments.h"
 #include "pdfreader_plugin.h"
 
 namespace app { class PluginManager; }
@@ -29,6 +30,8 @@ class QToolBar;
 class QTreeWidget;
 class QTreeWidgetItem;
 class PdfView;
+class CommentPanel;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -48,6 +51,12 @@ public:
     pdfreader::DocumentInfo pluginDocument() const;
     QString pluginSelectedText() const;
     QString pluginPageText(int pageNumber) const;
+    bool addComment(const QString& text = QString());
+    bool editComment(const QString& id, const QString& text);
+    bool removeComment(const QString& id);
+    bool activateComment(const QString& id, bool navigate = true, bool focusEditor = false);
+    QVector<app::Comment> comments() const;
+    bool saveDocumentToPath(const QString& path);
 
     // Headless checks for the parts that matter: the TOC is built, every entry
     // has a target, and clicking an entry actually moves the view there.
@@ -109,6 +118,8 @@ private:
     void finishToc(quint64 documentId, QProcess* worker, int exitCode);
     void refreshToc();
     void stopToc(DocTab* entry);
+    void refreshComments();
+    bool flushComments();
 
     // Declared before the documents so the PDFium library outlives them.
     pre::Library                    library_;
@@ -129,6 +140,11 @@ private:
         bool                            tocStateSaved = false;
         QSet<QString>                   expandedToc;
         QVector<app::Bookmark>          bookmarks;
+        QVector<app::Comment>           comments;
+        QString                        activeComment;
+        bool                           commentsDirty = false;
+        qint64                         commentSourceSize = 0;
+        qint64                         commentSourceModified = 0;
         // Reading position and view configuration, persisted on switch and exit.
         // The mode enums are stored as ints so this header needs no Qt widget
         // types (PdfView is only forward-declared here).
@@ -214,6 +230,11 @@ private:
     PdfView*       view_ = nullptr;
     QLabel*        pageLabel_ = nullptr;
     QSplitter*     splitter_ = nullptr;
+    QSplitter*     readingSplitter_ = nullptr;
+    CommentPanel*  commentPanel_ = nullptr;
+    QAction*       newCommentAction_ = nullptr;
+    QAction*       showCommentsAction_ = nullptr;
+    QTimer*        commentSaveTimer_ = nullptr;
     QTabBar*       tabBar_ = nullptr;
     QTabWidget*    sideTabs_ = nullptr;
     QTreeWidget*   bookmarkTree_ = nullptr;

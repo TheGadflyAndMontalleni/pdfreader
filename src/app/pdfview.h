@@ -18,10 +18,12 @@
 #include "find.h"
 #include "annot.h"
 #include "render.h"
+#include "comments.h"
 
 namespace pre {
 class PageIndex;
 }
+class QToolButton;
 
 // A position in the document's text, addressed the way a reader moves through
 // it: which page, which reconstructed line, and how far along that line.
@@ -110,6 +112,11 @@ public:
     // Rendered viewport pixels, so tests can assert on what is actually drawn.
     QImage  grabViewport();
 
+    void setComments(const QVector<app::Comment>& comments);
+    void setActiveComment(const QString& id);
+    bool goToComment(const QString& id);
+    QRectF commentRect(int page, const pre::MarkupRect& rect) const;
+
     // ---- find ----
     void setFindResults(const pre::FindResults& results);
     void clearFindResults();
@@ -140,6 +147,8 @@ signals:
     void zoomChanged(double zoom);
     void selectionChanged(bool hasSelection);
     void findMatchChanged(int index, int total);
+    void newCommentRequested();
+    void commentActivated(const QString& id);
 
 protected:
     bool event(QEvent* event) override;
@@ -196,6 +205,13 @@ private:
     void    setSelection(const TextPos& anchor, const TextPos& caret);
     // Normalised selection bounds (start <= end).
     void    selectionBounds(TextPos* start, TextPos* end) const;
+    QString commentAt(const QPoint& position) const;
+    QRectF commentMarker(int page, const pre::MarkupRect& rect) const;
+    void showSelectionCommentButton(const QPoint& position);
+
+    QVector<app::Comment> comments_;
+    QString activeComment_;
+    QToolButton* selectionCommentButton_ = nullptr;
 
     FPDF_DOCUMENT doc_ = nullptr;
     int           pageCount_ = 0;

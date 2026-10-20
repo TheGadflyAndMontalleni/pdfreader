@@ -7,7 +7,7 @@
   #error PayloadDir is required
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.4.0"
 #endif
 #ifdef InstallerTest
   #define ProductId "TheGadflyAndMontalleni.PDFReader.InstallerTest"
@@ -89,7 +89,7 @@ Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\DefaultIcon"; Val
 Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\shell\open\command"; ValueType: string; ValueData: """{app}\pdfreader.exe"" ""%1"""
 Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""
 Root: HKCU; Subkey: "{#CapabilityRoot}"; ValueType: string; ValueName: "ApplicationName"; ValueData: "PDF Reader"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "{#CapabilityRoot}"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "支持高清阅读、自动目录和个人书签的 PDF 阅读器"
+Root: HKCU; Subkey: "{#CapabilityRoot}"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "支持高清阅读、自动目录、个人书签和正文批注的 PDF 阅读器"
 Root: HKCU; Subkey: "{#CapabilityRoot}\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "PDFReader.pdf"
 Root: HKCU; Subkey: "{#RegisteredRoot}"; ValueType: string; ValueName: "PDFReader"; ValueData: "{#CapabilityRoot}"; Flags: uninsdeletevalue
 

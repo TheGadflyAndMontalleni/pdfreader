@@ -10,6 +10,7 @@
 #include <QWheelEvent>
 #include <QLabel>
 #include <QPushButton>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QtMath>
 
@@ -62,6 +63,15 @@ PdfView::PdfView(QWidget* parent) : QAbstractScrollArea(parent) {
     connect(open, &QPushButton::clicked, this, &PdfView::openRequested);
     welcomeLayout->addStretch();
 
+    selectionCommentButton_ = new QToolButton(viewport());
+    selectionCommentButton_->setObjectName("selectionCommentButton");
+    selectionCommentButton_->setText(tr("＋ 批注"));
+    selectionCommentButton_->setToolTip(tr("新建批注（Ctrl+Alt+M）"));
+    selectionCommentButton_->setFocusPolicy(Qt::NoFocus);
+    selectionCommentButton_->setStyleSheet("QToolButton { background: #ffffff; color: #815124; border: 1px solid #d3b487; border-radius: 5px; padding: 7px 12px; } QToolButton:hover { background: #fff1d5; }");
+    connect(selectionCommentButton_, &QToolButton::clicked, this, &PdfView::newCommentRequested);
+    selectionCommentButton_->hide();
+
     // One deferred re-render after a burst of resize events.
     rerenderTimer_ = new QTimer(this);
     rerenderTimer_->setSingleShot(true);
@@ -79,6 +89,7 @@ PdfView::PdfView(QWidget* parent) : QAbstractScrollArea(parent) {
 // ---------------------------------------------------------------------------
 
 void PdfView::setDocument(FPDF_DOCUMENT doc, int pageCount, pre::PageIndex* index) {
+    setComments({});
     welcome_->hide();
     doc_ = doc;
     pageCount_ = pageCount;
@@ -96,6 +107,7 @@ void PdfView::setDocument(FPDF_DOCUMENT doc, int pageCount, pre::PageIndex* inde
 }
 
 void PdfView::clearDocument() {
+    setComments({});
     welcome_->show();
     doc_ = nullptr;
     index_ = nullptr;
@@ -378,6 +390,37 @@ void PdfView::paintEvent(QPaintEvent*) {
         }
         painter.setBrush(Qt::NoBrush);
     }
+
+    // The standard highlights are rendered by PDFium. The active outline,
+    // margin pin and connector make the relationship to the card explicit.
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    for (const auto& c : comments_) {
+        const bool active = c.id == activeComment_;
+        for (const auto& [page, rects] : c.anchors) {
+            if (rects.empty() || (viewMode_ == ViewMode::SinglePage && page != currentPage_)) continue;
+            const QRectF first = commentRect(page, rects.front());
+            const QRectF marker = commentMarker(page, rects.front());
+            if (active) {
+                painter.setBrush(Qt::NoBrush);
+                painter.setPen(QPen(QColor("#be712d"), 1.5));
+                for (const auto& r : rects) {
+                    const QRectF rect = commentRect(page, r);
+                    if (rect.intersects(viewport()->rect())) painter.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 2, 2);
+                }
+                painter.setPen(QPen(QColor("#be712d"), 1, Qt::DashLine));
+                painter.drawLine(QPointF(first.right() + 2, first.center().y()), marker.center());
+            }
+            if (marker.intersects(viewport()->rect())) {
+                painter.setPen(QPen(QColor("#b47738"), 1));
+                painter.setBrush(active ? QColor("#ba702e") : QColor("#fff2c6"));
+                painter.drawRoundedRect(marker, 3, 3);
+                painter.setPen(active ? Qt::white : QColor("#9a642a"));
+                painter.drawLine(marker.topLeft() + QPointF(4, 5), marker.topRight() + QPointF(-4, 5));
+                painter.drawLine(marker.topLeft() + QPointF(4, 9), marker.topRight() + QPointF(-6, 9));
+            }
+        }
+    }
+    painter.setRenderHint(QPainter::Antialiasing, false);
 
     // Selection highlight, on top of the pages.
     if (hasSelection_ && index_) {
@@ -723,6 +766,7 @@ void PdfView::invalidateRenderedPages() {
 }
 
 void PdfView::clearSelection() {
+    selectionCommentButton_->hide();
     anchor_ = TextPos();
     caret_  = TextPos();
     if (hasSelection_) {
@@ -884,6 +928,7 @@ bool PdfView::event(QEvent* event) {
 }
 
 void PdfView::resizeEvent(QResizeEvent* event) {
+    selectionCommentButton_->hide();
     QAbstractScrollArea::resizeEvent(event);
     welcome_->setGeometry(viewport()->rect());
     // The viewport is final here, unlike in the owning window's resizeEvent,
@@ -901,6 +946,7 @@ void PdfView::resizeEvent(QResizeEvent* event) {
 }
 
 void PdfView::scrollContentsBy(int, int) {
+    selectionCommentButton_->hide();
     // A custom-painted viewport must be fully repainted: newly exposed areas
     // need pages rendered, so a blit would leave them blank.
     syncCurrentPage();
@@ -966,6 +1012,7 @@ void PdfView::keyPressEvent(QKeyEvent* event) {
 // ---------------------------------------------------------------------------
 
 void PdfView::mousePressEvent(QMouseEvent* event) {
+    selectionCommentButton_->hide();
     if (event->button() == Qt::MiddleButton) {
         // Middle-drag pans, the way most PDF readers behave.
         panning_    = true;
@@ -1008,7 +1055,8 @@ void PdfView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (!dragging_) {
-        viewport()->setCursor(index_ ? Qt::IBeamCursor : Qt::ArrowCursor);
+        viewport()->setCursor(!commentAt(event->pos()).isEmpty() ? Qt::PointingHandCursor :
+                              (index_ ? Qt::IBeamCursor : Qt::ArrowCursor));
         QAbstractScrollArea::mouseMoveEvent(event);
         return;
     }
@@ -1026,6 +1074,11 @@ void PdfView::mouseReleaseEvent(QMouseEvent* event) {
     }
     if (event->button() == Qt::LeftButton && dragging_) {
         dragging_ = false;
+        if (hasSelection_) showSelectionCommentButton(event->pos());
+        else {
+            const QString id = commentAt(event->pos());
+            if (!id.isEmpty()) emit commentActivated(id);
+        }
         event->accept();
         return;
     }
@@ -1039,6 +1092,72 @@ void PdfView::mouseDoubleClickEvent(QMouseEvent* event) {
     }
     const TextPos p = hitTest(event->pos());
     if (p.valid()) selectLine(p.page, p.line);
+    if (hasSelection_) showSelectionCommentButton(event->pos());
     dragging_ = false;
     event->accept();
+}
+
+void PdfView::setComments(const QVector<app::Comment>& comments) {
+    comments_ = comments;
+    activeComment_.clear();
+    viewport()->update();
+}
+
+void PdfView::setActiveComment(const QString& id) {
+    activeComment_ = id;
+    viewport()->update();
+}
+
+QRectF PdfView::commentRect(int page, const pre::MarkupRect& r) const {
+    if (page < 0 || page >= static_cast<int>(geom_.size())) return {};
+    const auto& g = geom_[static_cast<size_t>(page)];
+    return QRectF(pageLeft(page) + r.left * zoom_ - horizontalScrollBar()->value(),
+        pageTop(page) + (g.ptHeight - r.top) * zoom_ - verticalScrollBar()->value(),
+        (r.right - r.left) * zoom_, (r.top - r.bottom) * zoom_);
+}
+
+QRectF PdfView::commentMarker(int page, const pre::MarkupRect& r) const {
+    if (page < 0 || page >= static_cast<int>(geom_.size())) return {};
+    const auto& g = geom_[static_cast<size_t>(page)];
+    return QRectF(pageLeft(page) + g.width - 20 - horizontalScrollBar()->value(),
+        commentRect(page, r).center().y() - 8, 16, 16);
+}
+
+QString PdfView::commentAt(const QPoint& position) const {
+    for (auto c = comments_.crbegin(); c != comments_.crend(); ++c) {
+        for (const auto& [page, rects] : c->anchors) {
+            if (rects.empty() || (viewMode_ == ViewMode::SinglePage && page != currentPage_)) continue;
+            if (commentMarker(page, rects.front()).contains(position)) return c->id;
+            for (const auto& r : rects)
+                if (commentRect(page, r).adjusted(-2, -2, 2, 2).contains(position)) return c->id;
+        }
+    }
+    return {};
+}
+
+bool PdfView::goToComment(const QString& id) {
+    for (const auto& c : comments_) {
+        if (c.id != id || c.anchors.empty()) continue;
+        const int p = c.anchors.begin()->first;
+        const auto& rects = c.anchors.begin()->second;
+        if (rects.empty() || p < 0 || p >= pageCount_) return false;
+        clearSelection();
+        setPage(p);
+        const QRectF r = commentRect(p, rects.front());
+        verticalScrollBar()->setValue(verticalScrollBar()->value() + qRound(r.top()) - 80);
+        if (r.left() < 10 || r.right() > viewportWidth() - 10)
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value() + qRound(r.center().x()) - viewportWidth() / 2);
+        setActiveComment(id);
+        return true;
+    }
+    return false;
+}
+
+void PdfView::showSelectionCommentButton(const QPoint& position) {
+    selectionCommentButton_->adjustSize();
+    const QSize size = selectionCommentButton_->size();
+    selectionCommentButton_->move(std::clamp(position.x() + 8, 0, std::max(0, viewportWidth() - size.width())),
+        std::clamp(position.y() + 14, 0, std::max(0, viewportHeight() - size.height())));
+    selectionCommentButton_->show();
+    selectionCommentButton_->raise();
 }
