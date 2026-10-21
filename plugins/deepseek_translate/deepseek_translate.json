@@ -1,7 +1,7 @@
 {
   "Id": "org.pdfreader.deepseek-translate",
   "Name": "DeepSeek 生词翻译",
-  "Version": "1.0.0",
+  "Version": "1.1.0",
   "ApiVersion": 1,
-  "Description": "选词后按 Alt+T，自动识别语言并译为中文。支持自动划词、本机加密保存 API Key，仅发送选中的生词或短语。"
+  "Description": "毛玻璃浮窗跟随选区，单个英文词离线查询完整英汉释义，短语与上下文使用 DeepSeek 理解语境。Alt+T 查询，可切换方式和开启自动划词。"
 }

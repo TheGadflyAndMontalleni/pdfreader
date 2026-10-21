@@ -19,3 +19,9 @@ is imposed on these rights. Qt is a trademark of The Qt Company Ltd.
 The Windows installer is generated with [Inno Setup](https://jrsoftware.org/isinfo.php).
 Its Simplified Chinese translation is taken from the Inno Setup 6.7.3 source tree;
 the translation's original attribution is retained in `tools/installer/ChineseSimplified.isl`.
+
+The separately distributed translation plugin embeds an indexed snapshot of
+[ECDICT](https://github.com/skywind3000/ECDICT) at commit
+`bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`. Its MIT license is included in
+`licenses/ECDICT-LICENSE.txt`; the plugin archive records the source and data
+checksums in `licenses/ecdict-source.json`. Runtime dictionary lookups are local.

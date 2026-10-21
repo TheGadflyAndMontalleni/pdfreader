@@ -50,6 +50,7 @@ public:
     app::PluginManager* pluginManager() const { return plugins_.get(); }
     pdfreader::DocumentInfo pluginDocument() const;
     QString pluginSelectedText() const;
+    QRect pluginSelectionScreenRect() const;
     QString pluginPageText(int pageNumber) const;
     bool addComment(const QString& text = QString());
     bool editComment(const QString& id, const QString& text);

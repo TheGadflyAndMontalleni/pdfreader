@@ -4,6 +4,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $pluginBuild = Join-Path $root 'build/deepseek-translate'
 if (-not $SkipBuild) {
+    if (-not (Test-Path -LiteralPath (Join-Path $pluginBuild 'data/ecdict.pdict'))) {
+        & (Join-Path $root '.venv/Scripts/python.exe') (Join-Path $PSScriptRoot 'prepare_translation_dictionary.py') --output (Join-Path $pluginBuild 'data')
+        if ($LASTEXITCODE -ne 0) { throw 'Dictionary preparation failed.' }
+    }
     & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'build_plugin.ps1') -Source (Join-Path $root 'plugins/deepseek_translate') -BuildDir $pluginBuild
     if ($LASTEXITCODE -ne 0) { throw 'Translation plugin build failed.' }
 }

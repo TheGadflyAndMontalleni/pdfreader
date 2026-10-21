@@ -96,6 +96,7 @@ public:
     // ---- text selection ----
     bool    hasSelection() const { return hasSelection_; }
     QString selectedText();
+    QRect selectionScreenRect();
     // The selection as one rectangle per line, in PDF page space, grouped by
     // page. This is what a markup mark needs: a highlight follows the lines,
     // not the bounding box of the whole selection.

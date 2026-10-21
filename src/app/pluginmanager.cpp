@@ -67,7 +67,9 @@ app::PluginInfo Inspect(const QString& path, bool userInstalled) {
 
 // One host scope per enabled plugin. UI, connection contexts and callback
 // captures are destroyed before QPluginLoader releases its root object.
-class PluginHost : public QObject, public pdfreader::HostV1 {
+class PluginHost : public QObject, public pdfreader::HostV1, public pdfreader::SelectionGeometryV1 {
+    Q_OBJECT
+    Q_INTERFACES(pdfreader::SelectionGeometryV1)
 public:
     PluginHost(app::PluginManager* manager, MainWindow* window, QMenu* menu, const app::PluginInfo& info)
         : QObject(manager), manager_(manager), window_(window), id_(info.id) {
@@ -82,6 +84,7 @@ public:
     QObject* context() const override { return const_cast<PluginHost*>(this); }
     pdfreader::DocumentInfo document() const override { return window_->pluginDocument(); }
     QString selectedText() const override { return window_->pluginSelectedText(); }
+    QRect selectionScreenRect() const override { return window_->pluginSelectionScreenRect(); }
     QString pageText(int page) const override { return window_->pluginPageText(page); }
     bool openDocument(const QString& path) override { return window_->openDocument(path); }
     bool goToPage(int page) override {
@@ -399,3 +402,5 @@ void PluginManager::showDialog() {
     dialog.exec();
 }
 } // namespace app
+
+#include "pluginmanager.moc"

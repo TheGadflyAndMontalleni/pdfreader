@@ -457,6 +457,35 @@ void PdfView::paintEvent(QPaintEvent*) {
 // navigation
 // ---------------------------------------------------------------------------
 
+QRect PdfView::selectionScreenRect() {
+    if (!hasSelection_ || !index_ || geom_.empty()) return {};
+    TextPos start, end;
+    selectionBounds(&start, &end);
+    const QRect clip = viewport()->rect();
+    QRectF visible;
+    const int firstPage = viewMode_ == ViewMode::SinglePage ? currentPage_ :
+        std::max(start.page, pageAtY(verticalScrollBar()->value()));
+    const int lastPage = viewMode_ == ViewMode::SinglePage ? currentPage_ :
+        std::min(end.page, pageAtY(verticalScrollBar()->value() + viewportHeight()));
+    for (int page = std::max(start.page, firstPage); page <= std::min(end.page, lastPage); ++page) {
+        const auto& lines = index_->Lines(page);
+        const int firstLine = page == start.page ? start.line : 0;
+        const int lastLine = page == end.page ? end.line : static_cast<int>(lines.size()) - 1;
+        for (int line = std::max(0, firstLine); line <= lastLine && line < static_cast<int>(lines.size()); ++line) {
+            const int count = static_cast<int>(lines[line].charIndices.size());
+            const int from = page == start.page && line == start.line ? start.pos : 0;
+            const int to = page == end.page && line == end.line ? end.pos : count;
+            for (int pos = std::max(0, from); pos < std::min(to, count); ++pos) {
+                const auto rectangle = charRect(page, line, pos).intersected(clip);
+                if (!rectangle.isEmpty()) visible = visible.united(rectangle);
+            }
+        }
+    }
+    if (visible.isEmpty()) return {};
+    const auto bounds = visible.toAlignedRect();
+    return QRect(viewport()->mapToGlobal(bounds.topLeft()), bounds.size());
+}
+
 void PdfView::setPage(int index) {
     if (geom_.empty()) return;
     index = std::max(0, std::min(index, pageCount_ - 1));

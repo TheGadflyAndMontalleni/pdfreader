@@ -8,6 +8,7 @@
 namespace translate {
 inline constexpr auto DefaultModel = "deepseek-flash";
 QString ShortSelection(const QString& text);
+QString ReadingSelection(const QString& text);
 
 class TranslationClient : public QObject {
     Q_OBJECT

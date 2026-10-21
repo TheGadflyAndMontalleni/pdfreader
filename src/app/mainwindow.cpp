@@ -532,6 +532,7 @@ pdfreader::DocumentInfo MainWindow::pluginDocument() const {
     return {entry->path, QFileInfo(entry->path).fileName(), entry->index->PageCount(), view_->page() + 1};
 }
 QString MainWindow::pluginSelectedText() const { return cur() ? view_->selectedText() : QString(); }
+QRect MainWindow::pluginSelectionScreenRect() const { return cur() ? view_->selectionScreenRect() : QRect(); }
 QString MainWindow::pluginPageText(int pageNumber) const {
     if (!index_ || pageNumber < 1 || pageNumber > index_->PageCount()) return {};
     QStringList lines;

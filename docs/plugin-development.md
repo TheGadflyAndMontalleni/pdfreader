@@ -1,4 +1,4 @@
-# 插件开发指南：SDK 1.0 / API 1
+# 插件开发指南：SDK 1.1 / API 1
 
 PDF Reader 0.3.0 支持独立 C++ / Qt 插件 DLL，无需修改或链接阅读器源码。
 
@@ -22,7 +22,7 @@ PDF Reader 0.3.0 支持独立 C++ / Qt 插件 DLL，无需修改或链接阅读�
 
 ## 获取和独立构建 SDK
 
-- [下载 Plugin SDK 1.0](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/PDFReader-PluginSDK-1.0.zip)
+- [下载 Plugin SDK 1.1](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/latest/download/PDFReader-PluginSDK-1.1.zip)
 - [公共接口](../sdk/pdfreader_plugin.h)、[CMake 辅助函数](../sdk/PdfReaderPlugin.cmake)
 - [完整插件示例](../plugins/reading_tools/)
 
@@ -58,7 +58,13 @@ cmake --build build/my-plugin
 
 开发新插件时，复制示例目录，修改 JSON 的 **Id、Name、Version** 和 CMake 目标名。Id 必须唯一，例如 `com.example.pdfnotes`；示例 Id 已被内置插件占用，不能重复安装。
 
-## 最小插件
+## 可选选区坐标能力（阅读器 0.4.1 起）
+
+SDK 1.1 保持 `HostV1` / `PluginV1` 的虚函数表和 API 1 IID 不变，新增独立的 `SelectionGeometryV1` 能力接口。对 `host->context()` 使用 `qobject_cast<pdfreader::SelectionGeometryV1*>` 检测支持，再调用 `selectionScreenRect()`。返回值使用屏幕全局逻辑像素，已裁剪到可见 PDF 视口；无选区或选区滚出视野时返回空矩形。坐标随滚动、缩放、单页模式和窗口移动改变，不是物理像素。浮窗应在显示期间重新查询位置，并使用对应屏幕的 `availableGeometry()` 避免越界。
+
+旧阅读器返回空能力指针；插件必须处理缺少该能力的情况。新阅读器仍可加载旧 API 1 插件，旧版 SDK 下载地址保留作为兼容入口。
+
+## 最小插件示例
 
 元数据 `my_plugin.json` 在编译时嵌入 DLL，不需单独复制：
 

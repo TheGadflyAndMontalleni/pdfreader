@@ -3,6 +3,10 @@ param([switch] $SkipBuild, [switch] $SkipTests)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $SkipBuild) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'build/deepseek-translate/data/ecdict.pdict'))) {
+        & (Join-Path $root '.venv/Scripts/python.exe') (Join-Path $PSScriptRoot 'prepare_translation_dictionary.py') --output (Join-Path $root 'build/deepseek-translate/data')
+        if ($LASTEXITCODE -ne 0) { throw 'Dictionary preparation failed.' }
+    }
     & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'build_plugin.ps1') -Source (Join-Path $root 'plugins/deepseek_translate') -BuildDir (Join-Path $root 'build/deepseek-translate')
     if ($LASTEXITCODE -ne 0) { throw 'Translation plugin build failed.' }
 }
@@ -17,11 +21,16 @@ New-Item -ItemType Directory -Force -Path $stage,$output,(Join-Path $stage 'lice
 $pluginName = 'DeepSeekTranslate.dll'
 Copy-Item -LiteralPath (Join-Path $root 'build/deepseek-translate/reader-plugins/DeepSeekTranslate.dll') -Destination (Join-Path $stage $pluginName) -Force
 Copy-Item -LiteralPath (Join-Path $root 'plugins/deepseek_translate/README.md') -Destination (Join-Path $stage 'README.md') -Force
+$packageReadme = Get-Content -LiteralPath (Join-Path $stage 'README.md') -Raw
+Set-Content -LiteralPath (Join-Path $stage 'README.md') -Value $packageReadme.Replace('../../docs/images/translation-glass.png','preview.png') -Encoding utf8NoBOM
+Copy-Item -LiteralPath (Join-Path $root 'docs/images/translation-glass.png') -Destination (Join-Path $stage 'preview.png') -Force
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $stage -Force
 foreach ($license in @('LGPL-3.0-only.txt','GPL-3.0-only.txt')) {
     Copy-Item -LiteralPath (Join-Path $root "docs/licenses/$license") -Destination (Join-Path $stage 'licenses') -Force
 }
 Copy-Item -LiteralPath (Join-Path $root 'tools/sbom/qtbase-6.8.3.spdx') -Destination (Join-Path $stage 'licenses') -Force
+Copy-Item -LiteralPath (Join-Path $root 'docs/licenses/ECDICT-LICENSE.txt') -Destination (Join-Path $stage 'licenses') -Force
+Copy-Item -LiteralPath (Join-Path $root 'build/deepseek-translate/data/ecdict-source.json') -Destination (Join-Path $stage 'licenses') -Force
 Copy-Item -LiteralPath (Join-Path $stage $pluginName) -Destination (Join-Path $output $pluginName) -Force
 $zipName = "DeepSeekTranslate-$version.zip"
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $output $zipName) -Force

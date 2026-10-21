@@ -27,6 +27,7 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSslSocket>
+#include <QScreen>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -84,10 +85,18 @@ public:
     QUrl url() const { return QUrl(QString("http://127.0.0.1:%1/chat/completions").arg(listener.serverPort())); }
 };
 
+class HostScope : public QObject, public pdfreader::SelectionGeometryV1 {
+    Q_OBJECT
+    Q_INTERFACES(pdfreader::SelectionGeometryV1)
+public:
+    QRect bounds{200, 100, 80, 20};
+    QRect selectionScreenRect() const override { return bounds; }
+};
+
 class Host : public pdfreader::HostV1 {
 public:
     QMainWindow main;
-    QObject scope;
+    HostScope scope;
     QTemporaryDir temp;
     QVariantMap settings;
     QString selection;
@@ -95,7 +104,7 @@ public:
     Host() { main.setAttribute(Qt::WA_DontShowOnScreen); main.resize(1000, 700); main.show(); }
     ~Host() override { for (auto* dock : docks) delete dock; }
     QWidget* window() const override { return const_cast<QMainWindow*>(&main); }
-    QObject* context() const override { return const_cast<QObject*>(&scope); }
+    QObject* context() const override { return const_cast<HostScope*>(&scope); }
     pdfreader::DocumentInfo document() const override { return {"synthetic.pdf", "synthetic.pdf", 2, 1}; }
     QString selectedText() const override { return selection; }
     QString pageText(int) const override { return "THIS FULL PAGE MUST NEVER BE SENT"; }
@@ -114,7 +123,10 @@ public:
     QVariant setting(const QString& key, const QVariant& fallback = {}) const override { return settings.value(key, fallback); }
     void setSetting(const QString& key, const QVariant& value) override { settings.insert(key, value); }
     void showMessage(const QString&, int) override {}
-    void setKey(const QString& key = "synthetic-test-key") { settings["apiKeyProtected"] = ProtectKey(key).toBase64(); }
+    void setKey(const QString& key = "synthetic-test-key") {
+        settings["apiKeyProtected"] = ProtectKey(key).toBase64();
+        settings["provider"] = "deepseek";
+    }
 };
 
 class Tests : public QObject {
@@ -206,7 +218,9 @@ private slots:
         QVERIFY(ShortSelection(QString("word ").repeated(31)).isEmpty());
         QCOMPARE(ShortSelection("  bonjour\n monde  "), "bonjour monde");
         Server server; TranslationClient client(nullptr, server.url()); QSignalSpy fail(&client, &TranslationClient::failed);
-        client.start(QString(201, 'a'), "synthetic-test-key", DefaultModel);
+        QVERIFY(ReadingSelection(QString(8001, 'a')).isEmpty());
+        QVERIFY(!ReadingSelection(QString(3000, 'a')).isEmpty());
+        client.start(QString(8001, 'a'), "synthetic-test-key", DefaultModel);
         QCOMPARE(fail.count(), 1); QVERIFY(server.bodies.isEmpty());
         client.start("word", "", DefaultModel); QCOMPARE(fail.count(), 2); QVERIFY(server.bodies.isEmpty());
     }
@@ -214,7 +228,7 @@ private slots:
         Host host; host.setKey(); host.selection = "hypothesis";
         Server server; TranslationController controller(&host, server.url()); QString error;
         QVERIFY2(controller.initialize(&error), qPrintable(error));
-        auto* pane = host.main.findChild<QWidget*>("deepseekTranslationPane");
+        auto* pane = host.main.findChild<QWidget*>("translationGlassPopup");
         auto* result = pane->findChild<QPlainTextEdit*>("translationResult");
         auto* autoCheck = pane->findChild<QCheckBox*>("translationAuto");
         QVERIFY(!autoCheck->isChecked());
@@ -233,7 +247,7 @@ private slots:
         const auto cipher = QByteArray::fromBase64(host.settings["apiKeyProtected"].toByteArray());
         QCOMPARE(UnprotectKey(cipher), "another-synthetic-key");
         QVERIFY(!host.settings["apiKeyProtected"].toByteArray().contains("another-synthetic-key"));
-        controller.documentChanged(); QVERIFY(!host.docks[0]->isVisible());
+        controller.documentChanged(); QVERIFY(!pane->isVisible());
         const auto artifacts = qEnvironmentVariable("PDFREADER_TEST_ARTIFACTS");
         if (!artifacts.isEmpty()) {
             QDir().mkpath(artifacts);
@@ -245,7 +259,7 @@ private slots:
         Host host; host.setKey(); Server server;
         TranslationController controller(&host, server.url()); QString error;
         QVERIFY2(controller.initialize(&error), qPrintable(error));
-        auto* pane = host.main.findChild<QWidget*>("deepseekTranslationPane");
+        auto* pane = host.main.findChild<QWidget*>("translationGlassPopup");
         pane->findChild<QCheckBox*>("translationAuto")->setChecked(true);
         host.selection = "hyp"; controller.selectionChanged(); QTest::qWait(180);
         host.selection = "hypothesis"; // SDK 1 reports selection presence, not each drag position.
@@ -289,9 +303,9 @@ private slots:
         auto controller = std::make_unique<TranslationController>(&host, server.url());
         QString error; QVERIFY2(controller->initialize(&error), qPrintable(error));
         controller->translateSelection(); QTRY_COMPARE(server.bodies.size(), 1);
+        QPointer<QWidget> popup = host.main.findChild<QWidget*>("translationGlassPopup");
         controller.reset(); QTest::qWait(350);
-        QVERIFY(!host.docks[0]->isVisible());
-        QVERIFY(host.main.findChild<QPlainTextEdit*>("translationResult")->toPlainText() != "LATE RESULT");
+        QVERIFY(popup.isNull());
     }
     void changedSelectionWithoutSdkNotification() {
         Host host; host.setKey(); host.selection = "old";
@@ -302,12 +316,82 @@ private slots:
         host.selection = "new";
         QTest::qWait(300);
         QVERIFY(host.main.findChild<QPlainTextEdit*>("translationResult")->toPlainText().isEmpty());
-        QVERIFY(host.main.findChild<QLabel*>("translationStatus")->text().contains(QStringLiteral("选词已改变")));
+        QVERIFY(host.main.findChild<QLabel*>("translationStatus")->text().contains(QStringLiteral("选区已改变")));
+    }
+    void completeOfflineDictionary() {
+        Dictionary dictionary;
+        const auto entry = dictionary.lookup("hypothesis");
+        QVERIFY(entry.valid()); QVERIFY(entry.chinese.contains(QStringLiteral("假")));
+        QVERIFY(!entry.phonetic.isEmpty()); QVERIFY(!entry.english.isEmpty());
+        QVERIFY(entry.text().contains(QStringLiteral("英英释义")));
+        QCOMPARE(dictionary.lookup("HYPOTHESIS").chinese, entry.chinese);
+        QCOMPARE(dictionary.lookup(QStringLiteral("“hypothesis,”")).chinese, entry.chinese);
+        const auto verb = dictionary.lookup("run");
+        QVERIFY(verb.text().contains(QStringLiteral("词形变化")));
+        QVERIFY(dictionary.lookup("microarchitecture").valid());
+        QVERIFY(!dictionary.lookup("pdfreaderxyznotaword").valid());
+        QVERIFY(!dictionary.lookup("hello world").valid());
+        QVERIFY(IsDictionaryWord("don't")); QVERIFY(IsDictionaryWord(QStringLiteral("don’t")));
+        QVERIFY(!IsDictionaryWord(QStringLiteral("你好")));
+    }
+    void hybridRoutingAndNoKeyDictionary() {
+        Host host; host.selection = "hypothesis"; Server server;
+        TranslationController controller(&host, server.url()); QString error;
+        QVERIFY2(controller.initialize(&error), qPrintable(error));
+        controller.translateSelection();
+        auto* result = host.main.findChild<QPlainTextEdit*>("translationResult");
+        QVERIFY(result->toPlainText().contains(QStringLiteral("英英释义")));
+        QVERIFY(host.main.findChild<QLabel*>("translationLanguage")->text().contains("ECDICT"));
+        QCOMPARE(server.bodies.size(), 0);
+        QVERIFY(!host.main.findChild<QDialog*>("deepseekSettingsDialog"));
+        host.selection = "pdfreaderxyznotaword"; controller.translateSelection();
+        QVERIFY(host.main.findChild<QLabel*>("translationStatus")->text().contains(QStringLiteral("未收录")));
+        QCOMPARE(server.bodies.size(), 0); // Never silently charge for a dictionary miss.
+        controller.showSettings();
+        auto* settings = host.main.findChild<QDialog*>("deepseekSettingsDialog");
+        settings->findChild<QLineEdit*>("deepseekApiKey")->setText("synthetic-test-key");
+        QTest::mouseClick(settings->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save), Qt::LeftButton);
+        host.selection = QString("The hypothesis is consistent with the observation. ").repeated(20);
+        controller.translateSelection(); QTRY_COMPARE(server.bodies.size(), 1);
+        const auto payload = QJsonDocument::fromJson(server.bodies[0]).object();
+        QCOMPARE(payload["messages"].toArray()[1].toObject()["content"].toString(), host.selection.simplified());
+        QCOMPARE(payload["max_tokens"].toInt(), 4096);
+        QVERIFY(payload["messages"].toArray()[0].toObject()["content"].toString().contains("contextual explanation"));
+        QTRY_VERIFY(host.main.findChild<QLabel*>("translationLanguage")->text().contains("DeepSeek"));
+    }
+    void placementAvoidsSelection() {
+        for (const QRect screen : {QRect(0, 0, 1920, 1080), QRect(-1920, -300, 1920, 1080), QRect(0, 0, 800, 600)}) {
+            for (int x = 0; x < screen.width(); x += 90) for (int y = 0; y < screen.height(); y += 70) {
+                const QRect anchor(screen.topLeft() + QPoint(x, y), QSize(90, 24));
+                const auto popup = PlacePopup(anchor, QSize(374, 352), screen);
+                if (popup.isEmpty()) continue;
+                QVERIFY(screen.adjusted(8, 8, -8, -8).contains(popup));
+                QVERIFY(!popup.intersects(anchor.adjusted(-8, -8, 8, 8)));
+            }
+        }
+        const QRect anchor(200, 100, 80, 20);
+        const auto placement = PlacePopup(anchor, QSize(374, 352), QRect(0, 0, 1920, 1080));
+        QVERIFY(placement.left() > anchor.right()); QVERIFY(placement.top() > anchor.bottom());
+        QVERIFY(PlacePopup(QRect(0, 0, 1920, 1080), QSize(374, 352), QRect(0, 0, 1920, 1080)).isEmpty());
+    }
+    void followsSelectionAndClose() {
+        Host host; host.selection = "hypothesis"; Server server;
+        TranslationController controller(&host, server.url()); QString error;
+        QVERIFY2(controller.initialize(&error), qPrintable(error)); controller.translateSelection();
+        auto* popup = host.main.findChild<GlassPopup*>("translationGlassPopup");
+        QVERIFY(popup->isVisible()); QVERIFY(!popup->geometry().intersects(host.scope.bounds));
+        const auto original = popup->pos(); host.scope.bounds.translate(50, 40);
+        QTRY_VERIFY(popup->pos() != original); QVERIFY(!popup->geometry().intersects(host.scope.bounds));
+        host.scope.bounds = {}; QTRY_VERIFY(!popup->isVisible());
+        host.scope.bounds = QRect(200, 100, 80, 20); controller.translateSelection();
+        QTest::mouseClick(popup->findChild<QPushButton*>("translationClose"), Qt::LeftButton);
+        QVERIFY(!popup->isVisible());
     }
 };
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR") + "/Fonts/arial.ttf");
     const auto font = QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR") + "/Fonts/msyh.ttc");
     const auto families = QFontDatabase::applicationFontFamilies(font);
     if (!families.isEmpty()) app.setFont(QFont(families[0], 9));

@@ -1,60 +1,68 @@
-# DeepSeek 生词翻译 1.0.0
+# 词典与 DeepSeek 阅读翻译 1.1.0
 
-面向阅读时偶遇生词的小型插件。选中单词或短语，按 **Alt+T**，自动识别原文语言，默认给出简短的中文释义。
+选中文字后按 **Alt+T**：单个英文词查完整词典释义，短语或长上下文交给 DeepSeek 翻译、解释语境。毛玻璃卡片优先出现在选区右下方，避开原文。
 
-兼容 PDF Reader **0.3.0 / 0.4.0** 的 Plugin API 1，Windows 10 / 11 x64。无需替换阅读器程序；只安装本插件的 DLL 即可。插件自带与阅读器匹配的 Windows HTTPS 组件。
+![阅读翻译毛玻璃卡片](../../docs/images/translation-glass.png)
 
-## 安装和配置
+## 安装与升级
 
-1. [下载插件压缩包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/deepseek-translate-v1.0.0/DeepSeekTranslate-1.0.0.zip)，解压得到 `DeepSeekTranslate.dll`。
-2. 在阅读器中打开 **插件 → 插件管理 → 安装插件…**，选择该 DLL，再点击 **启用**。
-3. 打开 **插件 → DeepSeek 生词翻译 → DeepSeek API 设置…**，填写自己的 DeepSeek API Key 并保存。
-4. 在 PDF 中拖动选中生词或短语，按 **Alt+T**。小窗显示识别出的语言和中文释义，可复制结果。
+1. 建议先安装 [PDF Reader 0.4.1](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/tag/v0.4.1)，以获得准确的选区坐标和随阅读位置更新的浮窗。
+2. [下载插件包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/deepseek-translate-v1.1.0/DeepSeekTranslate-1.1.0.zip)，解压得到 `DeepSeekTranslate.dll`。
+3. 在 **插件 → 插件管理 → 安装插件…** 中选择 DLL，然后启用 **DeepSeek 生词翻译**。
+4. 打开 PDF，选中一个英文词，按 **Alt+T** 即可离线查词，不需要 API Key。
+5. 要理解短语或长上下文，在 **插件 → DeepSeek 生词翻译 → 翻译与 DeepSeek 设置…** 中保存自己的 API Key，再选中文字并按 **Alt+T**。
 
-也可以直接 [下载 DLL](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/deepseek-translate-v1.0.0/DeepSeekTranslate.dll)。更新插件时请先禁用并退出阅读器，再替换旧 DLL；配置保留。
+**已有 1.0 版插件时**：先禁用，关闭并重新启动阅读器；在插件管理中移除旧插件，再安装 1.1。配置和加密 Key 会保留。已加载 DLL 会被 Windows 占用，单纯关闭翻译小窗不足以替换插件。也可 [直接下载 DLL](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/deepseek-translate-v1.1.0/DeepSeekTranslate.dll)。
 
-默认模型为 `deepseek-flash`，可在设置中修改。根据 [DeepSeek 官方文档](https://api-docs.deepseek.com/)（2026-10-20 核对），插件请求官方 `https://api.deepseek.com/chat/completions`，使用非思考模式和 JSON 输出，让模型自动判断语言并简短译为简体中文。模型歧义词最多列举两种常见释义，未发送整页上下文，因此个别词义仍需结合原文判断。
+支持 Windows 10 / 11 x64、Qt 6.8.3、MinGW 13.1.0、Release、Plugin API 1。0.3.0 / 0.4.0 也能加载，但缺少准确选区坐标，只能按最近划词的鼠标位置估算；需要升级到 0.4.1 才能完整实现避开选区及滚动跟随。
 
-## 保持阅读流程简单
+## 三种查询方式
 
-- 不需要选择原文语言，目标固定为中文。
-- 默认按快捷键或菜单触发；勾选小窗中的 **自动划词翻译** 后，松开鼠标、选词稳定约半秒才请求。
-- 仅处理生词或短语，最多 200 字符、30 个空格分隔的词；长段落不发送。
-- 同一模型下最近 128 次成功查词在本次启用期间复用，不重复请求；**翻译 / 重试** 可强制重新查询。
-- 更换选词、关闭翻译窗、切换文档或禁用插件时，会取消旧请求，避免旧结果覆盖新词。界面保持响应，单次请求最多等待 30 秒。
+浮窗顶部可选择 **自动 / 离线英汉词典 / DeepSeek 语境理解**，选择会保存。
 
-## API Key 与数据
+- **自动**：单个英文词使用离线词典，短语、句子、长段落或非英文内容使用 DeepSeek。
+- **离线英汉词典**：内置 [ECDICT](https://github.com/skywind3000/ECDICT) 的 770,611 条词条，显示词库提供的音标、中英文完整释义和词形变化；可滚动查看和复制。查词不联网，不消耗 API 额度。词库未收录时会提示手动切换 DeepSeek。
+- **DeepSeek 语境理解**：自动识别原文语言，默认给出中文翻译；对较长内容附上简短的语境、习语或论述解释。最多处理 8,000 字符，只发送当前选区，不额外读取整页或上传 PDF。
 
-API Key 使用 Windows 当前用户的 DPAPI 加密后保存到插件配置中，不以明文写入配置文件、日志或插件包。复制配置到另一台电脑或另一个 Windows 账户后，需要重新填写 Key。也可使用 `DEEPSEEK_API_KEY` 环境变量；仅在未保存可解密的 Key 时读取它。
+默认模型为 `deepseek-flash`，可在设置中修改。请求使用官方 `https://api.deepseek.com/chat/completions`、非思考模式和 JSON 输出，模型及费用以 [DeepSeek 官方文档](https://api-docs.deepseek.com/) 为准。AI 解释仍可能出现错误，重要内容请结合原文核对。
 
-请求只包含系统翻译指令和当前选词，不发送文件名、PDF 路径、整页正文、批注、书签或阅读记录。缓存仅存在内存中，禁用即清空。勾选自动划词后会持续观察当前选词；不需要时可取消勾选或禁用插件。
+默认按快捷键或菜单触发。勾选 **自动划词** 后，松开鼠标、选区稳定约半秒才查询。相同模型最近 128 次成功 AI 查询在当前启用期间缓存；**重新查询** 可强制重试。
 
-网络使用系统代理和正常证书校验，不跟随服务重定向。API 调用由自己的 DeepSeek 账户计费；[计费规则](https://api-docs.deepseek.com/quick_start/pricing/)和模型可用性以官方信息为准。余额不足、Key 无效、限流和超时会直接显示简短提示。
+## 浮窗
 
-## 独立构建
+圆角、柔和边框、阴影和半透明磨砂背景；背景模糊采样只来自阅读器自身，不截图其他应用，不依赖 Windows 私有材质接口。显示、滚动或移动时更新背景，兼容 Windows 10 / 11。
 
-在仓库中使用与阅读器一致的 Qt 6.8.3 / MinGW GCC 13.1.0 / x64 / Release：
+优先放在选区右下方；空间不足时转向上方或侧面，并限制在所在屏幕的可用区域。选区滚出视野时隐藏；周围没有足够空间容纳可读窗口时，在状态栏提示调整选区，避免覆盖选中文字。按 **Esc** 或右上角 **×** 关闭，取消尚未完成的请求。
+
+## Key 与数据
+
+Key 使用 Windows 当前用户的 DPAPI 加密后保存在本机配置，不以明文写入配置文件、日志或插件包。也支持 `DEEPSEEK_API_KEY` 环境变量；仅在没有可解密的已存 Key 时读取。
+
+词典查询完全离线。DeepSeek 请求仅包含翻译指令和当前选中的文字，不发送文件名、路径、书签、批注或其他页面文字。AI 缓存只在内存中。网络使用系统代理与证书校验，不跟随重定向；请求最多等待 30 秒。更换选区、关闭浮窗、切换文档或禁用插件时取消旧请求。
+
+## 构建与验证
+
+使用与阅读器一致的 Qt 6.8.3 / MinGW GCC 13.1.0 / Windows x64 / Release：
 
 ```powershell
+python tools/prepare_translation_dictionary.py --output build/deepseek-translate/data
 pwsh -NoProfile -File tools/build_plugin.ps1 `
   -Source plugins/deepseek_translate -BuildDir build/deepseek-translate
-```
-
-输出：`build/deepseek-translate/reader-plugins/DeepSeekTranslate.dll`。只依赖公开 SDK，不链接阅读器内部源码或 PDFium。构建时从 Qt 安装目录嵌入 `qschannelbackend.dll`；非标准布局可在 CMake 配置中设置 `PDFREADER_SCHANNEL_DLL`。
-
-```powershell
 pwsh -NoProfile -File tools/verify_translation_plugin.ps1
 pwsh -NoProfile -File tools/make_translation_plugin.ps1
 ```
 
-验证使用合成文本、虚构 Key、本机模拟 HTTP 服务和独立配置，不读取用户 PDF 或真实 Key。可加 `-ProbeNetwork` 做官方 HTTPS 连通性检查：仅提交固定测试词和无效的虚构 Key，预期收到认证拒绝，不进行付费翻译。正式翻译效果需要填写自己的有效 Key 后验证。
+词库生成器下载固定提交的 CSV，验证 Git blob 校验值，再生成可独立解压的小块索引。运行时每次只读取目标词所在块，不扫描或载入整个词库。词库、HTTPS 组件都嵌入同一 DLL，无需额外安装数据目录或数据库运行库。生成的 28 MB 词库数据保存在被忽略的 `build/`，不提交到源码仓库；源提交、SHA-256 和许可证随插件包提供。
 
-## 代码
+验证使用合成文本、虚构 Key、本机模拟 HTTP 服务和独立配置，不读取真实 PDF 或 Key。`-ProbeNetwork` 仅使用虚构 Key 检查官方 HTTPS 认证拒绝。真实 Key 的付费 AI 翻译需要自行配置后验证。
 
-- `translation_client.*`：DeepSeek 请求、自动语言识别指令、响应验证、超时与取消。
-- `translation_controller.*`：小窗、快捷键、配置、自动划词和内存缓存。
-- `credentials.*`：Windows 当前用户密钥加解密。
-- `tls_runtime.*`：内嵌 HTTPS 后端部署，兼容旧阅读器运行包。
-- `tests/translation_tests.cpp`：真实网络流程的本机模拟、UI 和生命周期回归。
+真实阅读器定位和生命周期测试（先运行 `tools/build.ps1`）：
 
-插件代码沿用仓库 MIT 许可。内嵌 Qt HTTPS 后端的许可证与版权信息随压缩包一并提供，见 `licenses/`。
+```powershell
+$env:QT_QPA_PLATFORM = 'offscreen'
+build/translation_integration.exe `
+  build/deepseek-translate/reader-plugins/DeepSeekTranslate.dll `
+  build/audit/translation-reader.png
+```
+
+插件源码沿用仓库 MIT 许可。ECDICT 和内嵌 Qt 组件的版权与许可证见插件包的 `licenses/`。

@@ -83,3 +83,6 @@ add_subdirectory(plugins/reading_tools)
 add_subdirectory(tests/plugins)
 add_executable(plugin_regressions tests/plugin_regressions.cpp)
 target_link_libraries(plugin_regressions PRIVATE reader_ui Qt6::Test)
+
+add_executable(translation_integration tests/translation_integration.cpp)
+target_link_libraries(translation_integration PRIVATE reader_ui Qt6::Test)

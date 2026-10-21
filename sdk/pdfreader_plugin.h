@@ -1,9 +1,10 @@
-// PDF Reader Plugin SDK 1.0. Freeze this interface; incompatible changes need a new IID.
+// PDF Reader Plugin SDK 1.1. HostV1 and PluginV1 remain frozen; new capabilities are optional.
 #pragma once
 
 #include <QtPlugin>
 #include <QString>
 #include <QVariant>
+#include <QRect>
 #include <functional>
 
 class QAction;
@@ -59,7 +60,17 @@ public:
     virtual void selectionChanged() {}
 };
 
+// Optional capability, discovered with qobject_cast on HostV1::context().
+// Added without changing the frozen HostV1/PluginV1 vtables. Coordinates are
+// global logical pixels, clipped to the visible PDF viewport; empty = offscreen.
+class SelectionGeometryV1 {
+public:
+    virtual ~SelectionGeometryV1() = default;
+    virtual QRect selectionScreenRect() const = 0;
+};
+
 } // namespace pdfreader
 
 #define PDFREADER_PLUGIN_IID "org.pdfreader.Plugin/1.0"
 Q_DECLARE_INTERFACE(pdfreader::PluginV1, PDFREADER_PLUGIN_IID)
+Q_DECLARE_INTERFACE(pdfreader::SelectionGeometryV1, "org.pdfreader.SelectionGeometry/1.0")
