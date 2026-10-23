@@ -44,7 +44,7 @@ void PrepareTestOutput() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("PDF Reader"));
-    QApplication::setApplicationVersion(QStringLiteral("0.4.1"));
+    QApplication::setApplicationVersion(QStringLiteral("0.5.0-preview.1"));
 
     // Same artwork as the .ico in the PE resource table. Windows draws the
     // taskbar button from the executable's icon, but the title bar, the
@@ -53,11 +53,11 @@ int main(int argc, char** argv) {
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("PDF reader with automatic table-of-contents reconstruction."));
+        QStringLiteral("PDF and EPUB reader with table-of-contents navigation."));
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addPositionalArgument(QStringLiteral("file"),
-                                 QStringLiteral("PDF file to open."));
+                                 QStringLiteral("PDF or EPUB file to open."));
     QCommandLineOption selfTest(
         QStringLiteral("selftest"),
         QStringLiteral("Open FILE, verify the reconstructed TOC and that clicking an "

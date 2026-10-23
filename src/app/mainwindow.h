@@ -32,6 +32,8 @@ class QTreeWidgetItem;
 class PdfView;
 class CommentPanel;
 class QTimer;
+class QStackedWidget;
+class EpubView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -131,6 +133,7 @@ private:
         QString                         path;
         std::unique_ptr<pre::Document>  doc;
         std::unique_ptr<pre::PageIndex> index;
+        std::unique_ptr<EpubView>       epub;
         pre::TocTree                    toc;
         pre::ResolveStats               stats;
         quint64                         id = 0;
@@ -164,6 +167,11 @@ private:
     void    closeTab(int index);
     void    stashActiveState();              // view state -> active DocTab
     void    refreshTabTitle(int index);
+    EpubView* epub() const;
+    bool openEpub(const QString& path);
+    void refreshEpubToc();
+    void copySelection();
+    void clearSelection();
 
     std::vector<std::unique_ptr<DocTab>> tabs_;
     int activeTab_ = -1;
@@ -229,6 +237,7 @@ private:
     QTreeWidget*   tocTree_ = nullptr;
     QLabel*        tocStatus_ = nullptr;
     PdfView*       view_ = nullptr;
+    QStackedWidget* readingStack_ = nullptr;
     QLabel*        pageLabel_ = nullptr;
     QSplitter*     splitter_ = nullptr;
     QSplitter*     readingSplitter_ = nullptr;

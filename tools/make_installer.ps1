@@ -23,9 +23,18 @@ if (-not $InnoCompiler -or -not (Test-Path -LiteralPath $InnoCompiler)) {
 }
 $stage = Join-Path $root 'build/installer-stage'
 $payload = @(& (Join-Path $PSScriptRoot 'stage_runtime.ps1') -Destination $stage)
+$webviewSetup = Join-Path $root 'build/release-tools/MicrosoftEdgeWebview2Setup.exe'
+if (-not (Test-Path -LiteralPath $webviewSetup)) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $webviewSetup) | Out-Null
+    Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webviewSetup
+}
+$signature = Get-AuthenticodeSignature -LiteralPath $webviewSetup
+if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+    throw 'The WebView2 bootstrapper must have a valid Microsoft signature.'
+}
 $version = (Get-Item (Join-Path $stage 'pdfreader.exe')).VersionInfo.ProductVersion
 $version = ($version -split '\.')[0..2] -join '.'
-$arguments = @('/Qp', "/DProjectRoot=$root", "/DPayloadDir=$stage", "/DAppVersion=$version")
+$arguments = @('/Qp', "/DProjectRoot=$root", "/DPayloadDir=$stage", "/DAppVersion=$version", "/DWebViewSetup=$webviewSetup")
 if ($InstallerTest) { $arguments += '/DInstallerTest=1' }
 $arguments += (Join-Path $PSScriptRoot 'installer/pdfreader.iss')
 & $InnoCompiler @arguments

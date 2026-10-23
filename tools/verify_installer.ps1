@@ -86,6 +86,10 @@ try {
     $command = (Get-Item -LiteralPath "$classes\PDFReader.pdf\shell\open\command").GetValue('')
     Check ($command -eq "`"$exe`" `"%1`"") 'PDF Open with command quotes both executable and PDF path'
     Check ((Get-Item -LiteralPath "$classes\PDFReader.pdf").GetValue('') -eq 'PDF 文档') 'installer preserves Chinese text in application registration'
+    $epubCommand = (Get-Item -LiteralPath "$classes\PDFReader.epub\shell\open\command").GetValue('')
+    Check ($epubCommand -eq "`"$exe`" `"%1`"") 'EPUB Open with command quotes executable and book path'
+    Check ((Get-Item -LiteralPath "$classes\.epub\OpenWithProgids").GetValueNames() -contains 'PDFReader.epub') 'installation registers EPUB Open with support'
+    Check ((Get-Item -LiteralPath "$testRegistry\Capabilities\FileAssociations").GetValue('.epub') -eq 'PDFReader.epub') 'Windows default-app capabilities include EPUB'
     Check ((Get-Item -LiteralPath $shared).GetValueNames() -contains 'OtherReader.pdf') 'installation preserves other PDF handlers'
     Check ((Get-Item -LiteralPath $shared).GetValueNames() -contains 'PDFReader.pdf') 'installation adds its own PDF handler'
     Check ((Get-ItemProperty -LiteralPath $registered).PDFReader -eq 'Software\PDFReaderInstallerTest\Capabilities') 'application capabilities are registered'
@@ -115,6 +119,7 @@ try {
     Check (-not (Test-Path -LiteralPath "$classes\PDFReader.pdf") -and
         ((Get-Item -LiteralPath $shared).GetValueNames() -contains 'OtherReader.pdf') -and
         -not ((Get-Item -LiteralPath $shared).GetValueNames() -contains 'PDFReader.pdf')) 'uninstall removes only its own PDF registration'
+    Check (-not (Test-Path -LiteralPath "$classes\PDFReader.epub")) 'uninstall removes its EPUB handler'
     Check (Test-Path -LiteralPath $userFile) 'uninstall preserves user-added files'
     Check ((Get-Content -LiteralPath $env:PDFREADER_SETTINGS -Raw) -eq $userData) 'uninstall preserves reading settings and bookmarks'
     Check ((RegistrySnapshot 'Software\Classes\.pdf\OpenWithProgids') -eq $beforeOpenWith -and

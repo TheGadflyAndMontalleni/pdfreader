@@ -24,6 +24,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
@@ -36,6 +37,7 @@
 
 #include "annot.h"
 #include "pdfview.h"
+#include "epubview.h"
 #include "printing.h"
 #include "render.h"
 #include "session.h"
@@ -137,11 +139,11 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
                         &MainWindow::prevTab);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("打印(&P)…"), QKeySequence::Print, this,
-                        &MainWindow::printDocument);
+                        &MainWindow::printDocument)->setProperty("pdfOnly", true);
     fileMenu->addAction(tr("另存为…"), QKeySequence::SaveAs, this,
-                        &MainWindow::saveDocumentAs);
+                        &MainWindow::saveDocumentAs)->setProperty("pdfOnly", true);
     fileMenu->addSeparator();
-    fileMenu->addAction(tr("导出目录为 JSON…"), this, &MainWindow::saveTocAsJson);
+    fileMenu->addAction(tr("导出目录为 JSON…"), this, &MainWindow::saveTocAsJson)->setProperty("pdfOnly", true);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("退出(&Q)"), QKeySequence::Quit, this, &QWidget::close);
 
@@ -151,15 +153,15 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     fitWidthAction_ = viewMenu->addAction(tr("适应宽度"), QKeySequence(Qt::CTRL | Qt::Key_0), this,
                         &MainWindow::fitWidth);
     fitPageAction_ = viewMenu->addAction(tr("适应页面"), QKeySequence(Qt::CTRL | Qt::Key_1), this,
-                        [this] { if (view_) view_->setFitMode(PdfView::FitMode::Page); });
+                        [this] { setActiveFitMode(2); });
     fitWidthAction_->setCheckable(true);
     fitPageAction_->setCheckable(true);
     viewMenu->addSeparator();
     viewMenu->addAction(tr("连续视图"), QKeySequence(Qt::Key_C), this, [this] {
-        if (view_) view_->setViewMode(PdfView::ViewMode::Continuous);
+        setActiveViewMode(0);
     });
     viewMenu->addAction(tr("单页视图"), QKeySequence(Qt::CTRL | Qt::Key_6), this, [this] {
-        if (view_) view_->setViewMode(PdfView::ViewMode::SinglePage);
+        setActiveViewMode(1);
     });
     viewMenu->addSeparator();
 
@@ -182,11 +184,11 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
 
     QMenu* editMenu = menuBar()->addMenu(tr("编辑(&E)"));
     copyAction_ = editMenu->addAction(tr("复制"), QKeySequence::Copy, this,
-                                      [this] { view_->copySelectionToClipboard(); });
+                                      &MainWindow::copySelection);
     copyAction_->setEnabled(false);
-    editMenu->addAction(tr("全选"), QKeySequence::SelectAll, this, [this] { view_->selectAll(); });
+    editMenu->addAction(tr("全选"), QKeySequence::SelectAll, this, &MainWindow::selectAllText);
     editMenu->addAction(tr("取消选择"), QKeySequence(Qt::Key_Escape), this,
-                        [this] { view_->clearSelection(); });
+                        &MainWindow::clearSelection);
     editMenu->addSeparator();
     markupMenu_ = editMenu->addMenu(tr("标注(&A)"));
     markupMenu_->addAction(tr("高亮"), QKeySequence(Qt::CTRL | Qt::Key_H), this,
@@ -264,7 +266,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     pageCountLabel_->setMinimumWidth(44);
     bar->addWidget(pageCountLabel_);
     connect(pageEdit_, &QLineEdit::returnPressed, this, [this] {
-        if (document_) view_->setPage(pageEdit_->text().toInt() - 1);
+        setActivePage(pageEdit_->text().toInt() - 1);
         updateStatus();
         view_->setFocus();
     });
@@ -281,7 +283,8 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
         text.remove('%');
         bool valid = false;
         const double zoom = text.toDouble(&valid) / 100.0;
-        if (document_ && valid && zoom >= 0.1 && zoom <= 8.0) {
+        if (epub() && valid) epub()->setFontScale(zoom);
+        else if (document_ && valid && zoom >= 0.1 && zoom <= 8.0) {
             view_->setFitMode(PdfView::FitMode::None);
             view_->setZoom(zoom);
         }
@@ -294,7 +297,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     bar->addAction(fitPageAction_);
     bar->addSeparator();
     continuousAction_ = bar->addAction(tr("连续阅读"), this, [this](bool checked) {
-        view_->setViewMode(checked ? PdfView::ViewMode::Continuous : PdfView::ViewMode::SinglePage);
+        setActiveViewMode(checked ? 0 : 1);
         updateStatus();
     });
     continuousAction_->setCheckable(true);
@@ -380,7 +383,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
         bookmarkTools->addWidget(button);
     }
     bookmarkLayout->addLayout(bookmarkTools);
-    bookmarkEmpty_ = new QLabel(tr("还没有书签\n阅读时按 Ctrl+D 保存当前页"), bookmarksPage);
+    bookmarkEmpty_ = new QLabel(tr("还没有书签\n阅读时按 Ctrl+D 保存当前位置"), bookmarksPage);
     bookmarkEmpty_->setAlignment(Qt::AlignCenter);
     bookmarkEmpty_->setWordWrap(true);
     bookmarkLayout->addWidget(bookmarkEmpty_);
@@ -423,6 +426,8 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     // PdfView is itself a scroll area: it owns the continuous-scroll strip of
     // pages, so there is no outer QScrollArea to nest it in.
     view_ = new PdfView(this);
+    readingStack_ = new QStackedWidget(this);
+    readingStack_->addWidget(view_);
 
     // Keep the existing TOC splitter state compatible. A nested reading
     // splitter gives the margin its own independently resizable width.
@@ -430,7 +435,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     commentPanel_->hide();
     readingSplitter_ = new QSplitter(Qt::Horizontal, this);
     readingSplitter_->setObjectName("readingSplitter");
-    readingSplitter_->addWidget(view_);
+    readingSplitter_->addWidget(readingStack_);
     readingSplitter_->addWidget(commentPanel_);
     readingSplitter_->setStretchFactor(0, 1);
     readingSplitter_->setStretchFactor(1, 0);
@@ -529,11 +534,12 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
 pdfreader::DocumentInfo MainWindow::pluginDocument() const {
     const auto* entry = cur();
     if (!entry) return {};
-    return {entry->path, QFileInfo(entry->path).fileName(), entry->index->PageCount(), view_->page() + 1};
+    return {entry->path, QFileInfo(entry->path).fileName(), tabPageCount(activeTab_), tabPage(activeTab_) + 1};
 }
-QString MainWindow::pluginSelectedText() const { return cur() ? view_->selectedText() : QString(); }
-QRect MainWindow::pluginSelectionScreenRect() const { return cur() ? view_->selectionScreenRect() : QRect(); }
+QString MainWindow::pluginSelectedText() const { return epub() ? epub()->selectedText() : cur() ? view_->selectedText() : QString(); }
+QRect MainWindow::pluginSelectionScreenRect() const { return epub() ? epub()->selectionScreenRect() : cur() ? view_->selectionScreenRect() : QRect(); }
 QString MainWindow::pluginPageText(int pageNumber) const {
+    if (epub()) return epub()->sectionText(pageNumber - 1);
     if (!index_ || pageNumber < 1 || pageNumber > index_->PageCount()) return {};
     QStringList lines;
     for (const auto& line : index_->Lines(pageNumber - 1)) lines.append(QString::fromUtf8(line.text.c_str()));
@@ -568,6 +574,10 @@ bool MainWindow::openDocument(const QString& path) {
         }
     }
 
+    if (QFileInfo(path).suffix().compare("epub", Qt::CaseInsensitive) == 0) {
+        QApplication::restoreOverrideCursor();
+        return openEpub(canonical);
+    }
     auto entry = std::make_unique<DocTab>();
     entry->doc = std::make_unique<pre::Document>();
     std::string err;
@@ -661,9 +671,105 @@ MainWindow::DocTab* MainWindow::tab(int i) const {
 
 MainWindow::DocTab* MainWindow::cur() const { return tab(activeTab_); }
 
+EpubView* MainWindow::epub() const { return cur() ? cur()->epub.get() : nullptr; }
+
+bool MainWindow::openEpub(const QString& path) {
+    auto entry = std::make_unique<DocTab>();
+    entry->path = path; entry->id = ++nextDocumentId_;
+    entry->bookmarks = app::Session::LoadBookmarks(path);
+    entry->epub = std::make_unique<EpubView>();
+    auto* book = entry->epub.get();
+    readingStack_->addWidget(book);
+    connect(book, &EpubView::loaded, this, [this, book] {
+        if (book != epub()) return;
+        refreshEpubToc(); updateStatus();
+        if (plugins_) plugins_->notifyDocumentChanged();
+    });
+    connect(book, &EpubView::failed, this, [this, book](const QString& error) {
+        if (book == epub()) { setTocStatus(tr("EPUB 打开失败"), true); statusBar()->showMessage(error, 15000); updateStatus(); }
+    });
+    auto* saveTimer = new QTimer(book);
+    saveTimer->setSingleShot(true); saveTimer->setInterval(800);
+    connect(saveTimer, &QTimer::timeout, book, &EpubView::saveState);
+    connect(book, &EpubView::locationChanged, this, [this, book, saveTimer] {
+        saveTimer->start();
+        if (book != epub()) return;
+        updateStatus();
+        if (plugins_) plugins_->notifyPageChanged();
+    });
+    connect(book, &EpubView::selectionChanged, this, [this, book] {
+        if (book != epub()) return;
+        copyAction_->setEnabled(!book->selectedText().isEmpty());
+        if (plugins_) plugins_->notifySelectionChanged();
+    });
+    connect(book, &EpubView::findChanged, this, [this, book](int current, int total, bool truncated) {
+        if (book == epub()) findStatus_->setText(total ? tr("%1 / %2%3").arg(current).arg(total).arg(truncated ? "+" : "") : tr("无匹配"));
+    });
+    connect(book, &EpubView::commandRequested, this, [this, book](const QString& command) {
+        if (book != epub()) return;
+        if (command == "find") showFindBar();
+        else if (command == "open") onOpen();
+        else if (command == "bookmark") addBookmark();
+        else if (command == "goTo") goToPageDialog();
+        else if (command == "larger") applyZoom(1.25);
+        else if (command == "smaller") applyZoom(1 / 1.25);
+        else if (command == "dark") toggleInvert();
+        else if (command == "close") closeTab(activeTab_);
+        else if (command == "nextTab") nextTab();
+        else if (command == "previousTab") prevTab();
+        else if (command == "findNext") findNext();
+        else if (command == "findPrevious") findPrev();
+        else if (command == "translate") {
+            for (auto* action : findChildren<QAction*>())
+                if (action->isEnabled() && action->shortcut() == QKeySequence(Qt::ALT | Qt::Key_T)) { action->trigger(); break; }
+        }
+    });
+    QString error;
+    if (!book->open(path, &error)) {
+        QMessageBox::warning(this, tr("无法打开 EPUB"), error);
+        return false;
+    }
+    tabs_.push_back(std::move(entry));
+    const int index = tabCount() - 1;
+    { QSignalBlocker block(tabBar_); tabBar_->insertTab(index, QFileInfo(path).fileName()); tabBar_->setTabToolTip(index, path); }
+    tabBar_->show();
+    app::Session::AddRecentFile(path);
+    app::Session::SetLastOpenDir(QFileInfo(path).absolutePath());
+    app::Session::SetLastClosedFile(path);
+    rebuildRecentMenu(); activateTab(index);
+    return true;
+}
+
+void MainWindow::refreshEpubToc() {
+    tocTree_->setColumnHidden(1, true);
+    auto* book = epub();
+    tocTree_->clear();
+    if (!book || !book->ready()) { setTocStatus(book && !book->error().isEmpty() ? book->error() : tr("正在读取 EPUB 目录…"), false); return; }
+    int count = 0;
+    std::function<void(const QJsonArray&, QTreeWidgetItem*, int)> append;
+    append = [&](const QJsonArray& items, QTreeWidgetItem* parent, int depth) {
+        if (depth > 32) return;
+        for (const auto& value : items) {
+            if (++count > 10000) return;
+            const auto item = value.toObject();
+            auto* node = new QTreeWidgetItem({item.value("label").toString()});
+            node->setData(0, Qt::UserRole + 30, item.value("href").toString());
+            node->setToolTip(0, node->text(0));
+            if (parent) parent->addChild(node); else tocTree_->addTopLevelItem(node);
+            append(item.value("subitems").toArray(), node, depth + 1);
+        }
+    };
+    append(book->toc(), nullptr, 0); tocTree_->expandToDepth(1);
+    setTocStatus(tr("EPUB 目录 · %1 项").arg(count), false);
+}
+
+void MainWindow::copySelection() { if (epub()) epub()->copySelection(); else view_->copySelectionToClipboard(); }
+void MainWindow::clearSelection() { if (epub()) epub()->clearSelection(); else view_->clearSelection(); }
+
 void MainWindow::stashActiveState() {
     DocTab* t = cur();
     if (!t || !view_) return;
+    if (t->epub) { t->epub->saveState(); return; }
     t->page     = view_->page();
     t->zoom     = view_->zoom();
     t->fitMode  = static_cast<int>(view_->fitMode());
@@ -701,6 +807,19 @@ void MainWindow::bindTab(int index) {
     toc_         = t->toc;
     currentPath_ = t->path;
 
+    if (t->epub) {
+        view_->clearDocument();
+        readingStack_->setCurrentWidget(t->epub.get());
+        refreshEpubToc(); refreshBookmarks(); refreshComments();
+        commentPanel_->hide();
+        setWindowTitle(QString("%1 — EPUB · PDF Reader").arg(QFileInfo(t->path).fileName()));
+        updateStatus();
+        if (plugins_) plugins_->notifyDocumentChanged();
+        if (findBar_->isVisible()) runFind();
+        return;
+    }
+
+    readingStack_->setCurrentWidget(view_);
     refreshToc();
     refreshBookmarks();
     view_->setDocument(document_->handle(), index_->PageCount(), index_);
@@ -744,6 +863,7 @@ void MainWindow::stopToc(DocTab* entry) {
 void MainWindow::refreshToc() {
     const DocTab* entry = cur();
     if (!entry) { tocTree_->clear(); return; }
+    if (entry->epub) { refreshEpubToc(); return; }
     if (entry->tocPending) {
         tocTree_->clear();
         setTocStatus(tr("正在生成目录… 可继续阅读"), false);
@@ -823,6 +943,7 @@ int MainWindow::bookmarkCount() const {
 
 void MainWindow::refreshBookmarks() {
     bookmarkTree_->clear();
+    bookmarkTree_->setHeaderLabels({tr("书签"), epub() ? tr("章节") : tr("页码")});
     if (const DocTab* entry = cur()) {
         for (const auto& bookmark : entry->bookmarks) {
             auto* item = new QTreeWidgetItem({bookmark.title, QString::number(bookmark.page + 1)});
@@ -838,6 +959,18 @@ void MainWindow::refreshBookmarks() {
 
 bool MainWindow::addBookmark(const QString& title) {
     DocTab* entry = cur();
+    if (entry && entry->epub) {
+        auto* book = entry->epub.get();
+        if (!book->ready() || book->locator().isEmpty()) return false;
+        const QString cfi = book->locator();
+        auto it = std::find_if(entry->bookmarks.begin(), entry->bookmarks.end(), [&cfi](const app::Bookmark& b) { return b.locator == cfi; });
+        const QString label = title.trimmed().isEmpty() ? tr("第 %1 节 · %2%").arg(book->section() + 1).arg(book->progress() * 100, 0, 'f', 1) : title.trimmed();
+        if (it == entry->bookmarks.end()) entry->bookmarks.push_back({book->section(), label, cfi});
+        else if (!title.trimmed().isEmpty()) it->title = label;
+        app::Session::SaveBookmarks(entry->path, entry->bookmarks);
+        refreshBookmarks(); showSidebarPage(1);
+        return true;
+    }
     if (!entry || view_->pageCount() == 0) return false;
     const int page = view_->page();
     auto it = std::find_if(entry->bookmarks.begin(), entry->bookmarks.end(),
@@ -881,6 +1014,12 @@ bool MainWindow::removeBookmark(int row) {
 bool MainWindow::jumpToBookmark(int row) {
     const DocTab* entry = cur();
     if (!entry || row < 0 || row >= entry->bookmarks.size()) return false;
+    if (entry->epub) {
+        const auto& bookmark = entry->bookmarks[row];
+        if (bookmark.locator.isEmpty()) entry->epub->goToSection(bookmark.page);
+        else entry->epub->goTo(bookmark.locator);
+        return true;
+    }
     view_->setPage(entry->bookmarks[row].page);
     return true;
 }
@@ -906,7 +1045,8 @@ void MainWindow::closeTab(int index) {
     app::DocState st;
     st.page = removed->page; st.zoom = removed->zoom; st.fitMode = removed->fitMode;
     st.viewMode = removed->viewMode; st.invert = removed->invert; st.valid = true;
-    app::Session::SaveDocState(removed->path, st);
+    if (removed->epub) removed->epub->saveState();
+    else app::Session::SaveDocState(removed->path, st);
     stopToc(removed);
     // Borrowed page/text handles must be detached before their owner dies.
     if (removed == active) {
@@ -918,6 +1058,7 @@ void MainWindow::closeTab(int index) {
     tabs_.erase(tabs_.begin() + index);
     activeTab_ = -1;
     if (tabs_.empty()) {
+        readingStack_->setCurrentWidget(view_);
         toc_ = pre::TocTree();
         currentPath_.clear();
         tocTree_->clear();
@@ -958,6 +1099,7 @@ bool MainWindow::activateDocTab(int index) {
 }
 
 int MainWindow::tabPage(int index) const {
+    if (auto* t = tab(index); t && t->epub) return t->epub->section();
     if (index == activeTab_) return view_ ? view_->page() : -1;
     DocTab* t = tab(index);
     return t ? t->page : -1;
@@ -965,6 +1107,7 @@ int MainWindow::tabPage(int index) const {
 
 int MainWindow::tabPageCount(int index) const {
     DocTab* t = tab(index);
+    if (t && t->epub) return t->epub->sectionCount();
     return (t && t->index) ? t->index->PageCount() : 0;
 }
 
@@ -974,6 +1117,10 @@ QString MainWindow::tabTitle(int index) const {
 }
 
 bool MainWindow::setActivePage(int page) {
+    if (epub()) {
+        if (page < 0 || page >= epub()->sectionCount()) return false;
+        epub()->goToSection(page); return true;
+    }
     if (!view_ || activeTab_ < 0) return false;
     view_->setPage(page);
     return view_->page() == page;
@@ -991,6 +1138,7 @@ QString MainWindow::tabTocSource(int index) const {
 }
 
 int MainWindow::activeViewMode() const {
+    if (epub()) return epub()->scrolled() ? 0 : 1;
     return view_ ? static_cast<int>(view_->viewMode()) : -1;
 }
 
@@ -999,22 +1147,26 @@ int MainWindow::activeFitMode() const {
 }
 
 bool MainWindow::setActiveViewMode(int mode) {
+    if (epub()) { epub()->setScrolled(mode == 0); return true; }
     if (!view_) return false;
     view_->setViewMode(static_cast<PdfView::ViewMode>(mode));
     return static_cast<int>(view_->viewMode()) == mode;
 }
 
 bool MainWindow::setActiveFitMode(int mode) {
+    if (epub()) return false;
     if (!view_) return false;
     view_->setFitMode(static_cast<PdfView::FitMode>(mode));
     return static_cast<int>(view_->fitMode()) == mode;
 }
 
 int MainWindow::activePageCount() const {
+    if (epub()) return epub()->sectionCount();
     return view_ ? view_->pageCount() : 0;
 }
 
 bool MainWindow::activeInvert() const {
+    if (epub()) return epub()->dark();
     return view_ && view_->invertColors();
 }
 
@@ -1043,6 +1195,7 @@ void MainWindow::restoreSessionTabs() {
 }
 
 void MainWindow::saveCurrentState() {
+    if (epub()) { epub()->saveState(); return; }
     stashActiveState();
     DocTab* t = cur();
     if (!t) return;
@@ -1110,7 +1263,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         st.viewMode = t->viewMode;
         st.invert   = t->invert;
         st.valid    = true;
-        app::Session::SaveDocState(t->path, st);
+        if (t->epub) t->epub->saveState();
+        else app::Session::SaveDocState(t->path, st);
         open << t->path;
     }
     app::Session::SetOpenTabs(open);
@@ -1122,6 +1276,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::populateToc(const pre::TocTree& tree, const pre::ResolveStats& stats) {
+    tocTree_->setColumnHidden(1, false);
     tocTree_->clear();
     for (size_t i = 0; i < tree.roots.size(); ++i)
         tocTree_->addTopLevelItem(MakeItem(tree.roots[i], QString::number(i)));
@@ -1148,6 +1303,7 @@ void MainWindow::populateToc(const pre::TocTree& tree, const pre::ResolveStats& 
 
 void MainWindow::onTocItemClicked(QTreeWidgetItem* item, int) {
     if (!item) return;
+    if (epub()) { epub()->goTo(item->data(0, Qt::UserRole + 30).toString()); return; }
     const int page = item->data(0, kPageRole).toInt();
     if (page < 0) return;
     view_->setPage(page);
@@ -1398,6 +1554,7 @@ void MainWindow::showSidebarPage(int index) {
 }
 
 void MainWindow::toggleInvert() {
+    if (epub()) { epub()->setDark(!epub()->dark()); updateStatus(); return; }
     if (!view_) return;
     const bool on = !view_->invertColors();
     view_->setInvertColors(on);
@@ -1417,11 +1574,12 @@ void MainWindow::showFindBar() {
 void MainWindow::closeFindBar() {
     findBar_->hide();
     findStatus_->clear();
-    view_->clearFindResults();
-    view_->setFocus();
+    if (epub()) { epub()->find({}, false); epub()->setFocus(); }
+    else { view_->clearFindResults(); view_->setFocus(); }
 }
 
 void MainWindow::runFind() {
+    if (epub()) { epub()->find(findEdit_->text(), findCase_->isChecked()); return; }
     if (!index_ || !view_) return;
     const QString needle = findEdit_->text();
     if (needle.isEmpty()) {
@@ -1441,21 +1599,45 @@ void MainWindow::runFind() {
 
 void MainWindow::findNext() {
     if (findBar_->isHidden()) showFindBar();
+    if (epub()) { epub()->findNext(); return; }
     if (view_->matchCount() == 0) runFind();
     view_->goToNextMatch();
 }
 
 void MainWindow::findPrev() {
     if (findBar_->isHidden()) showFindBar();
+    if (epub()) { epub()->findNext(true); return; }
     if (view_->matchCount() == 0) runFind();
     view_->goToPrevMatch();
 }
 
-void MainWindow::onNextPage() { view_->goToNextPage(); }void MainWindow::onPrevPage() { view_->goToPrevPage(); }
-void MainWindow::onFirstPage() { view_->goToFirstPage(); }
-void MainWindow::onLastPage() { view_->goToLastPage(); }
+void MainWindow::onNextPage() { if (epub()) epub()->next(); else view_->goToNextPage(); }
+void MainWindow::onPrevPage() { if (epub()) epub()->previous(); else view_->goToPrevPage(); }
+void MainWindow::onFirstPage() { if (epub()) epub()->goToSection(0); else view_->goToFirstPage(); }
+void MainWindow::onLastPage() { if (epub()) epub()->goToSection(epub()->sectionCount() - 1); else view_->goToLastPage(); }
 
 void MainWindow::updateStatus() {
+    const bool isEpub = epub() != nullptr;
+    for (auto* action : findChildren<QAction*>()) if (action->property("pdfOnly").toBool()) action->setEnabled(document_ != nullptr);
+    lcdAction_->setEnabled(!isEpub);
+    fitWidthAction_->setEnabled(!isEpub); fitPageAction_->setEnabled(!isEpub);
+    markupMenu_->setEnabled(!isEpub);
+    if (isEpub) {
+        auto* book = epub(); const bool ready = book->ready();
+        newCommentAction_->setEnabled(false); showCommentsAction_->setEnabled(false);
+        addBookmarkAction_->setEnabled(ready); pageEdit_->setEnabled(ready); zoomBox_->setEnabled(ready);
+        copyAction_->setEnabled(!book->selectedText().isEmpty());
+        { QSignalBlocker block(pageEdit_); pageEdit_->setText(ready ? QString::number(book->section() + 1) : QString()); }
+        pageEdit_->setToolTip(tr("输入章节序号跳转；EPUB 按正文位置保存进度"));
+        pageCountLabel_->setText(tr("/ %1 节").arg(book->sectionCount()));
+        { QSignalBlocker block(zoomBox_); zoomBox_->setCurrentText(QString::number(qRound(book->fontScale() * 100)) + "%"); }
+        zoomBox_->setToolTip(tr("EPUB 字号（文字重新排版）"));
+        continuousAction_->setChecked(book->scrolled()); invertAction_->setChecked(book->dark());
+        pageLabel_->setText(ready ? tr("EPUB · 第 %1 / %2 节    阅读进度 %3%    字号 %4%")
+            .arg(book->section() + 1).arg(book->sectionCount()).arg(book->progress() * 100, 0, 'f', 1).arg(qRound(book->fontScale() * 100)) : tr("EPUB · %1").arg(book->error().isEmpty() ? tr("正在加载…") : book->error()));
+        return;
+    }
+    pageEdit_->setToolTip(tr("输入页码并按回车跳转")); zoomBox_->setToolTip(tr("PDF 缩放"));
     const bool loaded = document_ != nullptr;
     newCommentAction_->setEnabled(loaded && view_->hasSelection());
     showCommentsAction_->setEnabled(loaded);
@@ -1485,6 +1667,7 @@ void MainWindow::fitWidth() {
 }
 
 void MainWindow::applyZoom(double factor) {
+    if (epub()) { epub()->setFontScale(epub()->fontScale() * factor); return; }
     // Explicit zoom leaves fit-to-width mode.
     view_->setFitWidthMode(false);
     view_->setZoom(view_->zoom() * factor);
@@ -1979,13 +2162,14 @@ bool MainWindow::selectLine(int pageIndex, int lineIndex) {
 }
 
 void MainWindow::selectAllText() {
+    if (epub()) { epub()->selectAll(); return; }
     if (!document_) return;
     view_->selectAll();
     view_->setFocus();
 }
 
 void MainWindow::startFind(const QString& needle) {
-    if (!document_) return;
+    if (!document_ && !epub()) return;
     showFindBar();
     findEdit_->setText(needle);   // fires runFind() through textChanged
 }
@@ -2256,6 +2440,12 @@ int MainWindow::printToPdf(const QString& outPath, int firstPage, int lastPage,
 }
 
 void MainWindow::goToPageDialog() {
+    if (epub()) {
+        bool ok = false;
+        const int chapter = QInputDialog::getInt(this, tr("跳转到章节"), tr("章节序号："), epub()->section() + 1, 1, std::max(1, epub()->sectionCount()), 1, &ok);
+        if (ok) epub()->goToSection(chapter - 1);
+        return;
+    }
     if (!document_) return;
     bool ok = false;
     const int page = QInputDialog::getInt(this, tr("跳转到页"), tr("页码："),
@@ -2290,6 +2480,6 @@ void MainWindow::onOpen() {
                                           : QFileInfo(currentPath_).absolutePath();
     }
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("打开 PDF"), startDir, tr("PDF 文档 (*.pdf);;所有文件 (*)"));
+        this, tr("打开书籍或 PDF"), startDir, tr("书籍与文档 (*.pdf *.epub);;EPUB 电子书 (*.epub);;PDF 文档 (*.pdf);;所有文件 (*)"));
     if (!path.isEmpty()) openDocument(path);
 }

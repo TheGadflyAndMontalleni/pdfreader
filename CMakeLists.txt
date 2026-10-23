@@ -11,7 +11,7 @@ set(CMAKE_AUTORCC ON)
 set(QT_PREFIX  "${CMAKE_SOURCE_DIR}/tools"        CACHE PATH "Qt prefix")
 set(PDFIUM_DIR "${CMAKE_SOURCE_DIR}/tools/pdfium" CACHE PATH "PDFium prefix")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport Test
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport Network Test
              PATHS "${QT_PREFIX}/lib/cmake" NO_DEFAULT_PATH)
 
 # PDFium ships an MSVC import library; tools/make_pdfium_implib.ps1 converts it
@@ -65,9 +65,14 @@ add_library(reader_ui STATIC
     src/app/pluginmanager.cpp
     src/app/comments.cpp
     src/app/commentpanel.cpp
+    src/app/epubserver.cpp
+    src/app/epubview.cpp
+    src/app/epub.qrc
 )
-target_include_directories(reader_ui PUBLIC "${CMAKE_SOURCE_DIR}/src/app" "${CMAKE_SOURCE_DIR}/sdk")
-target_link_libraries(reader_ui PUBLIC pdfcore Qt6::Widgets Qt6::PrintSupport)
+target_include_directories(reader_ui PUBLIC "${CMAKE_SOURCE_DIR}/src/app" "${CMAKE_SOURCE_DIR}/sdk"
+    PRIVATE third_party/webview third_party/webview2)
+target_link_libraries(reader_ui PUBLIC pdfcore Qt6::Widgets Qt6::PrintSupport Qt6::Network
+    PRIVATE advapi32 ole32 shell32 shlwapi user32 version uuid)
 
 add_executable(pdfreader WIN32 src/app/main.cpp src/app/app.rc src/app/app.qrc)
 target_link_libraries(pdfreader PRIVATE reader_ui)
@@ -86,3 +91,6 @@ target_link_libraries(plugin_regressions PRIVATE reader_ui Qt6::Test)
 
 add_executable(translation_integration tests/translation_integration.cpp)
 target_link_libraries(translation_integration PRIVATE reader_ui Qt6::Test)
+
+add_executable(epub_regressions tests/epub_regressions.cpp)
+target_link_libraries(epub_regressions PRIVATE reader_ui Qt6::Test)

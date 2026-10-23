@@ -6,6 +6,14 @@
 
 适用于 Windows 10 / 11 的 64 位 x64 电脑。安装包已包含 Qt、PDFium 等运行组件。
 
+**EPUB 试用版：[下载安装包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.1/PDFReader-Setup.exe) · [免安装版](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.1/PDFReader-Portable.exe)**。
+支持 EPUB 2／3 的目录、文字重排、字号、夜间模式、查找、阅读记录和可删除书签；
+可与 PDF 混合打开，并继续使用现有选词翻译插件。下载安装后使用 **Ctrl+O** 选择 `.epub`。
+安装器会在缺少 WebView2 时联网补装微软运行组件，免安装版需要电脑已有 WebView2。
+暂不支持 DRM、EPUB 批注和打印，复杂版式仍在验证。[技术方案与试用范围](docs/epub-design.md)。
+
+![EPUB 阅读和现有翻译插件](docs/images/epub-preview.png)
+
 ![PDF Reader 界面](docs/images/welcome.png)
 
 ## 下载与安装

@@ -1,0 +1,4 @@
+# Preserve upstream generated headers verbatim and keep their whitespace rules
+# separate from authored code. GitHub collapses dependency diffs by default.
+third_party/** linguist-vendored -whitespace
+third_party/webview2/WebView2.h linguist-generated
