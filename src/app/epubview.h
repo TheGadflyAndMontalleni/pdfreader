@@ -6,6 +6,7 @@
 #include <QHash>
 #include <memory>
 #include "session.h"
+#include "comments.h"
 
 class EpubServer;
 class QTimer;
@@ -30,6 +31,8 @@ public:
     double zoom() const { return fixedLayout_ ? effectiveZoom_ : fontScale_; }
     QJsonArray toc() const { return toc_; }
     QString selectedText() const { return selection_; }
+    QString selectionLocator() const { return selectionLocator_; }
+    int selectionSection() const { return selectionSection_; }
     QRect selectionScreenRect() const;
     QString sectionText(int index) const;
     void goTo(const QString& target);
@@ -42,6 +45,8 @@ public:
     void setFitMode(int mode);
     void selectAll();
     void clearSelection();
+    void setComments(const QVector<app::Comment>& comments, const QString& activeId = {});
+    void activateComment(const QString& id, bool navigate);
     void copySelection();
     void find(const QString& text, bool matchCase);
     void findNext(bool backwards = false);
@@ -58,6 +63,7 @@ signals:
     void selectionChanged();
     void findChanged(int current, int total, bool truncated);
     void commandRequested(const QString& command);
+    void commentActivated(const QString& id);
     void testResult(const QJsonObject& result);
     void captured(bool success);
 protected:
@@ -74,6 +80,8 @@ private:
     void syncViewport();
     QTimer* viewportTimer_ = nullptr;
     QString path_, title_, error_, locator_, selection_;
+    QString selectionLocator_;
+    int selectionSection_ = -1;
     QRectF selectionRect_;
     QSizeF cssViewport_;
     int section_ = 0, sectionCount_ = 0;

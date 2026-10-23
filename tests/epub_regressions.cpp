@@ -10,6 +10,11 @@
 #include <QScreen>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <QToolButton>
+#include <QCryptographicHash>
+#include <QProcess>
+#include <QPointer>
+#include "commentpanel.h"
 #include "pluginmanager.h"
 #include "tocworker.h"
 #include "epubview.h"
@@ -166,6 +171,32 @@ private slots:
         QCOMPARE(result["value"].toObject()["index"].toInt(-1), 0);
         QVERIFY(result["value"].toObject()["text"].toBool());
     }
+    void localCommentStore() {
+        QTemporaryDir directory;
+        const auto path = directory.path() + "/book.epub";
+        QVERIFY(QFile::copy(fixtures_ + "/阅读试用.epub", path));
+        app::Comment c;
+        c.id = "test-note"; c.quote = "serendipity"; c.text = "中文\n<b>plain text</b>";
+        c.locator = "epubcfi(/6/2[one]!/4/8,/1:9,/1:20)"; c.section = 0;
+        c.created = c.modified = QDateTime::currentDateTimeUtc();
+        const auto save = [&](const QVector<app::Comment>& values) {
+            return app::SaveLocalComments(path, values, -1, -1, app::CommentFormat::Epub);
+        };
+        QVERIFY(save({c}));
+        auto saved = app::LoadLocalComments(path, 2, app::CommentFormat::Epub);
+        QVERIFY(saved && saved->size() == 1);
+        QCOMPARE(saved->front().locator, c.locator); QCOMPARE(saved->front().text, c.text);
+        QVERIFY(!app::LoadLocalComments(path, 2));
+        QFile file(path); QVERIFY(file.open(QIODevice::Append)); file.write("changed"); file.close();
+        QVERIFY(!app::LoadLocalComments(path, 2, app::CommentFormat::Epub));
+        c.section = 2; QVERIFY(save({c}));
+        QVERIFY(!app::LoadLocalComments(path, 2, app::CommentFormat::Epub));
+        c.section = 0; c.locator = "invalid-anchor"; QVERIFY(save({c}));
+        QVERIFY(!app::LoadLocalComments(path, 2, app::CommentFormat::Epub));
+        QVERIFY(save({}));
+        saved = app::LoadLocalComments(path, 2, app::CommentFormat::Epub);
+        QVERIFY(saved && saved->isEmpty());
+    }
     void localBookCompatibility() {
         const auto path = qEnvironmentVariable("EPUB_TEST_BOOK");
         if (path.isEmpty()) QSKIP("Set EPUB_TEST_BOOK to check a private local book without copying it into fixtures");
@@ -312,7 +343,109 @@ private slots:
         book->goToSection(1); QTRY_COMPARE(book->section(), 1);
         QVERIFY(window.jumpToBookmark(0)); QTRY_COMPARE(book->section(), 0);
         QVERIFY(window.removeBookmark(0)); QCOMPARE(window.bookmarkCount(), 0);
+        // Use this same MainWindow for comment coverage: PDFium's V8 runtime
+        // must not be destroyed and initialized again in one test process.
+        auto* panel = window.findChild<CommentPanel*>(); QVERIFY(panel);
+        auto* add = window.findChild<QAction*>("newComment"); QVERIFY(add);
+        auto* show = window.findChild<QAction*>("showComments"); QVERIFY(show);
+        QVERIFY(show->isEnabled()); QVERIFY(!window.addComment("no selection"));
+        QFile original(fixtures_ + "/阅读试用.epub"); QVERIFY(original.open(QIODevice::ReadOnly));
+        const auto digest = QCryptographicHash::hash(original.readAll(), QCryptographicHash::Sha256); original.close();
         query(*book, "const d=reader.view.renderer.getContents()[0].doc,n=d.querySelector('#word').firstChild,r=d.createRange();r.setStart(n,9);r.setEnd(n,20);d.getSelection().removeAllRanges();d.getSelection().addRange(r);return true;");
+        QTRY_VERIFY_WITH_TIMEOUT(add->isEnabled(), 5000);
+        QVERIFY(!book->selectionLocator().isEmpty());
+        auto response = query(*book, "const button=document.querySelector('#selection-comment');const visible=!button.hidden;button.click();return visible;");
+        QVERIFY(response["value"].toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(window.comments().size(), 1, 5000);
+        QVERIFY(panel->isVisible());
+        const auto note = window.comments().front();
+        QCOMPARE(note.quote, QString("serendipity")); QVERIFY(note.anchors.empty());
+        QVERIFY(note.locator.startsWith("epubcfi(")); QCOMPARE(note.section, 0);
+        QTRY_VERIFY_WITH_TIMEOUT(book->selectedText().isEmpty(), 5000);
+        auto* editor = panel->findChild<QPlainTextEdit*>("commentEditor:" + note.id); QVERIFY(editor);
+        const QString text = QString::fromUtf8("这里值得再想一想。\n中文、emoji 📝 和 <b>纯文字</b>。");
+        editor->setPlainText(text);
+        QTest::qWait(450);
+        auto saved = app::LoadLocalComments(fixtures_ + "/阅读试用.epub", 2, app::CommentFormat::Epub);
+        QVERIFY(saved && saved->size() == 1); QCOMPARE(saved->front().text, text);
+        QProcess child;
+        child.start(QCoreApplication::applicationFilePath(), {"--check-epub-comment", fixtures_ + "/阅读试用.epub", text});
+        QVERIFY(child.waitForFinished(10000)); QCOMPARE(child.exitCode(), 0);
+        const QString idJson = QString::fromUtf8(QJsonDocument(QJsonArray{note.id}).toJson(QJsonDocument::Compact)).mid(1).chopped(1);
+        const QString anchorCheck = "const c=reader.view.renderer.getContents()[0],r=reader.view.resolveNavigation(" +
+            QString::fromUtf8(QJsonDocument(QJsonArray{note.locator}).toJson(QJsonDocument::Compact)).mid(1).chopped(1) +
+            ").anchor(c.doc);return {quote:r.toString(),marks:c.overlayer.element.querySelectorAll('[data-comment-id]').length,rects:r.getClientRects().length};";
+        response = query(*book, "await reader.activateComment(" + idJson + ",true);" + anchorCheck);
+        QCOMPARE(response["value"].toObject()["quote"].toString(), note.quote);
+        QCOMPARE(response["value"].toObject()["marks"].toInt(), 1);
+        QVERIFY(response["value"].toObject()["rects"].toInt() > 0);
+        book->setFontScale(1.4); book->setScrolled(false); book->setDark(true);
+        response = query(*book, "await reader.activateComment(" + idJson + ",true);" + anchorCheck);
+        QCOMPARE(response["value"].toObject()["quote"].toString(), note.quote);
+        QCOMPARE(response["value"].toObject()["marks"].toInt(), 1);
+        show->setChecked(false);
+        response = query(*book, "await reader.activateComment(" + idJson + ",true);const d=reader.view.renderer.getContents()[0].doc,r=reader.view.resolveNavigation(" +
+            QString::fromUtf8(QJsonDocument(QJsonArray{note.locator}).toJson(QJsonDocument::Compact)).mid(1).chopped(1) +
+            ").anchor(d),b=r.getBoundingClientRect();d.body.dispatchEvent(new d.defaultView.MouseEvent('click',{bubbles:true,clientX:b.x+b.width/2,clientY:b.y+b.height/2}));return true;");
+        QTRY_VERIFY_WITH_TIMEOUT(panel->isVisible(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(window.focusWidget(), editor, 5000);
+        // A second note on the same range must have a separate marker and card.
+        query(*book, "await reader.activateComment(" + idJson + ",false);const d=reader.view.renderer.getContents()[0].doc,n=d.querySelector('#word').firstChild,r=d.createRange();r.setStart(n,9);r.setEnd(n,20);d.getSelection().removeAllRanges();d.getSelection().addRange(r);return true;");
+        QTRY_VERIFY(!book->selectionLocator().isEmpty());
+        query(*book, "const d=reader.view.renderer.getContents()[0].doc;d.dispatchEvent(new d.defaultView.MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:80,clientY:80}));return true;");
+        QTRY_VERIFY(query(*book, "return !document.querySelector('#selection-menu').hidden;")["value"].toBool());
+        query(*book, "document.querySelector('#context-comment').click();return true;");
+        QTRY_COMPARE_WITH_TIMEOUT(window.comments().size(), 2, 5000);
+        response = query(*book, "await reader.activateComment(" + idJson + ",false);" + anchorCheck);
+        QCOMPARE(response["value"].toObject()["marks"].toInt(), 2);
+        const QString duplicate = window.comments().back().id;
+        auto* remove = panel->findChild<QToolButton*>("commentDelete:" + duplicate); QVERIFY(remove);
+        QTest::mouseClick(remove, Qt::LeftButton);
+        QCOMPARE(window.comments().size(), 1);
+        book->goToSection(1); QTRY_COMPARE(book->section(), 1);
+        query(*book, "const d=reader.view.renderer.getContents()[0].doc,r=d.createRange();r.selectNodeContents(d.querySelector('p:not(.eyebrow)'));d.getSelection().removeAllRanges();d.getSelection().addRange(r);d.dispatchEvent(new KeyboardEvent('keydown',{key:'m',ctrlKey:true,altKey:true,bubbles:true,cancelable:true}));return true;");
+        QTRY_COMPARE_WITH_TIMEOUT(window.comments().size(), 2, 5000);
+        const QString second = window.comments().back().id;
+        QCOMPARE(window.comments().back().section, 1);
+        QVERIFY(window.editComment(second, "edit immediately before switching"));
+        QVERIFY(window.openDocument(fixtures_ + "/epub2.epub"));
+        QTRY_VERIFY_WITH_TIMEOUT(window.comments().isEmpty(), 5000);
+        saved = app::LoadLocalComments(fixtures_ + "/阅读试用.epub", 2, app::CommentFormat::Epub);
+        QVERIFY(saved && saved->size() == 2); QCOMPARE(saved->back().text, QString("edit immediately before switching"));
+        QVERIFY(window.closeDocTab(1)); QVERIFY(window.closeDocTab(0));
+        QVERIFY(window.openDocument(fixtures_ + "/阅读试用.epub"));
+        book = window.findChild<EpubView*>(); QVERIFY(book);
+        QTRY_VERIFY_WITH_TIMEOUT(book->ready(), 15000);
+        QTRY_COMPARE(window.comments().size(), 2);
+        QVERIFY(window.activateComment(note.id));
+        response = query(*book, "await reader.activateComment(" + idJson + ",true);" + anchorCheck);
+        QCOMPARE(response["value"].toObject()["quote"].toString(), note.quote);
+        QCOMPARE(response["value"].toObject()["marks"].toInt(), 1);
+        QSignalSpy commentCapture(book, &EpubView::captured);
+        book->capture(fixtures_ + "/epub-comments.png");
+        if (commentCapture.isEmpty()) QVERIFY(commentCapture.wait(5000));
+        QVERIFY(commentCapture.takeFirst()[0].toBool());
+        {
+            const qreal dpr = window.devicePixelRatioF();
+            QImage image(window.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(dpr); image.fill(Qt::white);
+            QPainter painter(&image); painter.drawPixmap(0, 0, window.grab());
+            painter.drawImage(QRect(book->mapTo(&window, QPoint()), book->size()), QImage(fixtures_ + "/epub-comments.png"));
+            painter.end(); QVERIFY(image.save(fixtures_ + "/epub-comment-cards.png"));
+        }
+        QVERIFY(window.removeComment(note.id)); QVERIFY(window.removeComment(second));
+        QVERIFY(window.closeDocTab(0));
+        QVERIFY(window.openDocument(fixtures_ + "/阅读试用.epub"));
+        book = window.findChild<EpubView*>(); QVERIFY(book);
+        QTRY_VERIFY_WITH_TIMEOUT(book->ready(), 15000);
+        QVERIFY(window.comments().isEmpty());
+        response = query(*book, "await reader.goTo(0);return reader.view.renderer.getContents()[0].overlayer.element.querySelectorAll('[data-comment-id]').length;");
+        QCOMPARE(response["value"].toInt(-1), 0);
+        QVERIFY(original.open(QIODevice::ReadOnly));
+        QCOMPARE(QCryptographicHash::hash(original.readAll(), QCryptographicHash::Sha256), digest); original.close();
+        book->setFontScale(1); book->setScrolled(true); book->setDark(false);
+        show->setChecked(false);
+        query(*book, "await reader.goTo(0);const d=reader.view.renderer.getContents()[0].doc,n=d.querySelector('#word').firstChild,r=d.createRange();r.setStart(n,9);r.setEnd(n,20);d.getSelection().removeAllRanges();d.getSelection().addRange(r);return true;");
         QTRY_COMPARE(window.pluginSelectedText(), QString("serendipity"));
         QVERIFY(!window.pluginSelectionScreenRect().isEmpty());
         QCOMPARE(window.pluginSelectedText(), book->selectedText());
@@ -361,6 +494,27 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(fixed->ready(), 15000);
         QVERIFY(window.setActiveFitMode(1)); QCOMPARE(window.activeFitMode(), 1);
         QVERIFY(window.setActiveFitMode(2)); QCOMPARE(window.activeFitMode(), 2);
+        const auto fixedSelection = query(*fixed, "await reader.goTo(0);const {doc:d,index}=reader.view.renderer.getContents()[0],n=d.querySelector('#word').firstChild,r=d.createRange();r.setStart(n,9);r.setEnd(n,20);d.getSelection().removeAllRanges();d.getSelection().addRange(r);return {index,text:d.getSelection().toString(),cfi:reader.view.getCFI(index,r)};");
+        QVERIFY2(!fixedSelection.contains("error"), qPrintable(QJsonDocument(fixedSelection).toJson()));
+        QTRY_VERIFY2(!fixed->selectionLocator().isEmpty(), qPrintable(fixed->error()));
+        QVERIFY2(window.addComment("Fixed-layout comment"), qPrintable(QString("Ready %1, section %2/%3, text %4, error %5")
+            .arg(fixed->ready()).arg(fixed->selectionSection()).arg(fixed->sectionCount()).arg(fixed->selectedText()).arg(fixed->error())));
+        QCOMPARE(window.comments().size(), 1);
+        const auto fixedId = window.comments().front().id;
+        const auto fixedIdJson = QString::fromUtf8(QJsonDocument(QJsonArray{fixedId}).toJson(QJsonDocument::Compact)).mid(1).chopped(1);
+        const auto fixedCfiJson = QString::fromUtf8(QJsonDocument(QJsonArray{window.comments().front().locator}).toJson(QJsonDocument::Compact)).mid(1).chopped(1);
+        const QString fixedGeometry = "await reader.activateComment(" + fixedIdJson + ",true);const c=reader.view.renderer.getContents()[0],r=reader.view.resolveNavigation(" + fixedCfiJson +
+            ").anchor(c.doc).getBoundingClientRect(),f=c.doc.defaultView.frameElement,b=f.getBoundingClientRect(),m=c.overlayer.element.querySelector('[data-comment-id] rect').getBoundingClientRect();return {marks:c.overlayer.element.querySelectorAll('[data-comment-id]').length,dx:Math.abs(m.x-(b.x+r.x*b.width/f.clientWidth)),dy:Math.abs(m.y-(b.y+r.y*b.height/f.clientHeight)),visible:m.bottom>0&&m.top<innerHeight};";
+        for (const double scale : {.5, 4.}) {
+            fixed->setFontScale(scale);
+            const auto fixedCheck = query(*fixed, fixedGeometry);
+            QVERIFY2(!fixedCheck.contains("error"), qPrintable(QJsonDocument(fixedCheck).toJson()));
+            QCOMPARE(fixedCheck["value"].toObject()["marks"].toInt(), 1);
+            QVERIFY(fixedCheck["value"].toObject()["dx"].toDouble() < 2);
+            QVERIFY(fixedCheck["value"].toObject()["dy"].toDouble() < 2);
+            QVERIFY(fixedCheck["value"].toObject()["visible"].toBool());
+        }
+        QVERIFY(window.removeComment(fixedId));
         window.close();
     }
 };
@@ -368,6 +522,11 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     if (application.arguments().size() == 3 && application.arguments()[1] == "--toc-worker")
         return app::RunTocWorker(application.arguments()[2]);
+    if (application.arguments().size() == 4 && application.arguments()[1] == "--check-epub-comment") {
+        const auto saved = app::LoadLocalComments(application.arguments()[2], 2, app::CommentFormat::Epub);
+        return saved && saved->size() == 1 && saved->front().text == application.arguments()[3] &&
+            !saved->front().locator.isEmpty() ? 0 : 1;
+    }
     EpubRegressions tests;
     return QTest::qExec(&tests, argc, argv);
 }

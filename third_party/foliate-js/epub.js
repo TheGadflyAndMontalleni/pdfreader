@@ -698,7 +698,8 @@ class Resources {
         }
         const idref = $itemref?.getAttribute('idref')
         const index = this.spine.findIndex(item => item.idref === idref)
-        const anchor = doc => CFI.toRange(doc, parts)
+        // A spine-only CFI denotes the start of a section, not a DOM range.
+        const anchor = (parts.parent ?? parts).length ? doc => CFI.toRange(doc, parts) : () => 0
         return { index, anchor }
     }
 }

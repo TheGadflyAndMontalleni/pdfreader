@@ -18,6 +18,11 @@ separators, rejects invalid dimensions, and uses safe centering so an enlarged
 page's left edge remains reachable. `paginator.js` and `view.js` propagate chapter
 load errors to the host instead of leaving a blank reader; the paginator also
 releases its navigation lock on failure and stops safely at book boundaries.
+`fixed-layout.js` also exposes section indices and overlays for text selections
+and comments, scales its annotation layer with the page, and scrolls CFI ranges
+into view at manual zoom levels.
+`epub.js` resolves spine-only CFIs to the section start instead of attempting to
+construct a DOM range from an empty path.
 All other vendored sources remain as shipped upstream. `src/app/epub/reader.js` is our
 adapter and sanitizes book HTML before it reaches a renderer.
 

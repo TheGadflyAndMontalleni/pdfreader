@@ -186,9 +186,11 @@ bool RemovePdfComment(FPDF_DOCUMENT doc, const Comment& comment) {
     return ok;
 }
 
-std::optional<QVector<Comment>> LoadLocalComments(const QString& path, int pageCount) {
+std::optional<QVector<Comment>> LoadLocalComments(const QString& path, int pageCount, CommentFormat format) {
     QSettings settings(Session::SettingsPath(), QSettings::IniFormat);
     settings.beginGroup(KeyFor(path));
+    if (settings.value("format", "pdf").toString() != (format == CommentFormat::Epub ? "epub" : "pdf"))
+        return std::nullopt;
     const QFileInfo file(path);
     if (settings.value("size", -1).toLongLong() != file.size() ||
         settings.value("modified", -1).toLongLong() != file.lastModified().toMSecsSinceEpoch()) return std::nullopt;
@@ -206,6 +208,14 @@ std::optional<QVector<Comment>> LoadLocalComments(const QString& path, int pageC
         c.modified = QDateTime::fromString(o["modified"].toString(), Qt::ISODateWithMs);
         if (c.id.isEmpty() || ids.contains(c.id) || !o["anchors"].isArray()) return std::nullopt;
         ids.insert(c.id);
+        if (format == CommentFormat::Epub) {
+            c.locator = o["locator"].toString();
+            c.section = o["section"].toInt(-1);
+            if (!c.locator.startsWith("epubcfi(") || !c.locator.endsWith(')') ||
+                c.locator.size() > 65536 || c.section < 0 || c.section >= pageCount) return std::nullopt;
+            result.push_back(c);
+            continue;
+        }
         for (const auto& anchor : o["anchors"].toArray()) {
             const auto a = anchor.toArray();
             if (a.size() != 5 || !std::all_of(a.begin(), a.end(),
@@ -221,7 +231,8 @@ std::optional<QVector<Comment>> LoadLocalComments(const QString& path, int pageC
     return result;
 }
 
-bool SaveLocalComments(const QString& path, const QVector<Comment>& comments, qint64 sourceSize, qint64 sourceModified) {
+bool SaveLocalComments(const QString& path, const QVector<Comment>& comments, qint64 sourceSize,
+    qint64 sourceModified, CommentFormat format) {
     if (path.isEmpty()) return false;
     QJsonArray data;
     for (const auto& c : comments) {
@@ -230,10 +241,12 @@ bool SaveLocalComments(const QString& path, const QVector<Comment>& comments, qi
             for (const auto& r : rects) anchors.append(QJsonArray{page, r.left, r.bottom, r.right, r.top});
         data.append(QJsonObject{{"id", c.id}, {"quote", c.quote}, {"text", c.text},
             {"created", c.created.toString(Qt::ISODateWithMs)},
-            {"modified", c.modified.toString(Qt::ISODateWithMs)}, {"anchors", anchors}});
+            {"modified", c.modified.toString(Qt::ISODateWithMs)}, {"anchors", anchors},
+            {"locator", c.locator}, {"section", c.section}});
     }
     QSettings settings(Session::SettingsPath(), QSettings::IniFormat);
     settings.beginGroup(KeyFor(path));
+    settings.setValue("format", format == CommentFormat::Epub ? "epub" : "pdf");
     const QFileInfo file(path);
     settings.setValue("size", sourceSize < 0 ? file.size() : sourceSize);
     settings.setValue("modified", sourceModified < 0 ? file.lastModified().toMSecsSinceEpoch() : sourceModified);

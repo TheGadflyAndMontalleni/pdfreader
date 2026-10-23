@@ -1,11 +1,15 @@
 import './foliate/view.js'
 import { EPUB } from './foliate/epub.js'
+import { EpubComments } from './comments.js'
 import { BlobReader, ZipReader, BlobWriter, configure } from './foliate/vendor/zip.js'
 
 const send = (type, values = {}) => window.readerEvent({ type, ...values }).catch(() => {})
 const message = document.querySelector('#message')
 const view = document.createElement('foliate-view')
 document.body.append(view)
+const comments = new EpubComments(view, send)
+const commentButton = document.querySelector('#selection-comment')
+const selectionMenu = document.querySelector('#selection-menu')
 let book, options, matches = [], matchIndex = -1, searchGeneration = 0, selectedDocument
 const fail = error => {
     message.hidden = false
@@ -91,10 +95,14 @@ const loadBook = async () => {
     return result
 }
 const selection = () => {
-    let chosen, range, text = ''
-    for (const { doc } of view.renderer?.getContents() ?? []) {
+    let chosen, range, text = '', section = -1, cfi = ''
+    for (const { doc, index } of view.renderer?.getContents() ?? []) {
         const sel = doc.getSelection()
-        if (sel?.rangeCount && !sel.isCollapsed && sel.toString().trim()) { chosen = doc; range = sel.getRangeAt(0); text = sel.toString(); break }
+        if (sel?.rangeCount && !sel.isCollapsed && sel.toString().trim()) {
+            chosen = doc; range = sel.getRangeAt(0); text = sel.toString(); section = index
+            cfi = view.getCFI(index, range)
+            break
+        }
     }
     let rect = [0, 0, 0, 0]
     if (range) {
@@ -106,8 +114,27 @@ const selection = () => {
         const right = Math.min(innerWidth, bounds.left + inner.right * sx), bottom = Math.min(innerHeight, bounds.top + inner.bottom * sy)
         if (right > left && bottom > top) rect = [left, top, right - left, bottom - top]
     }
-    send('selection', { text: text.slice(0, 100000), rect, width: innerWidth, height: innerHeight })
+    commentButton.hidden = !cfi || !rect[2] || !rect[3]
+    if (!commentButton.hidden) {
+        const width = commentButton.offsetWidth, height = commentButton.offsetHeight
+        commentButton.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect[0] + rect[2] + 8))}px`
+        const below = rect[1] + rect[3] + 8
+        commentButton.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, below + height < innerHeight ? below : rect[1] - height - 8))}px`
+    }
+    return send('selection', { text: text.slice(0, 100000), cfi, section, rect, width: innerWidth, height: innerHeight })
 }
+const newComment = async () => {
+    selectionMenu.hidden = true
+    await selection()
+    send('command', { command: 'comment' })
+}
+for (const element of [commentButton, selectionMenu]) element.addEventListener('pointerdown', e => e.preventDefault())
+commentButton.addEventListener('click', newComment)
+document.querySelector('#context-comment').addEventListener('click', newComment)
+document.querySelector('#context-copy').addEventListener('click', () => {
+    selectionMenu.hidden = true; send('command', { command: 'copy' })
+})
+document.addEventListener('pointerdown', e => { if (!selectionMenu.contains(e.target)) selectionMenu.hidden = true })
 let selectionTimer
 const queueSelection = () => { clearTimeout(selectionTimer); selectionTimer = setTimeout(selection, 35) }
 function reportZoom() {
@@ -122,7 +149,7 @@ function reportZoom() {
     }
 }
 const viewportObserver = new ResizeObserver(() => {
-    requestAnimationFrame(reportZoom); queueSelection()
+    requestAnimationFrame(() => { reportZoom(); comments.draw() }); queueSelection()
 })
 viewportObserver.observe(view)
 const configureLayout = () => {
@@ -140,6 +167,7 @@ const shortcuts = event => {
     if (ctrl && key.toLowerCase() === 'f') command = 'find'
     else if (ctrl && key.toLowerCase() === 'o') command = 'open'
     else if (ctrl && key.toLowerCase() === 'd') command = 'bookmark'
+    else if (ctrl && alt && key.toLowerCase() === 'm') command = 'comment'
     else if (ctrl && key.toLowerCase() === 'g') command = 'goTo'
     else if (ctrl && ['+', '='].includes(key)) command = 'larger'
     else if (ctrl && key === '-') command = 'smaller'
@@ -153,14 +181,29 @@ const shortcuts = event => {
     else if (key === 'Escape') reader.clearSelection()
     else if (!ctrl && !alt && (key === 'ArrowRight' || key === 'PageDown' || (key === ' ' && !shift))) reader.next()
     else if (!ctrl && !alt && (key === 'ArrowLeft' || key === 'PageUp' || (key === ' ' && shift))) reader.previous()
-    if (command) { event.preventDefault(); send('command', { command }) }
+    if (command) {
+        event.preventDefault()
+        if (command === 'comment') newComment()
+        else send('command', { command })
+    }
 }
 window.addEventListener('keydown', shortcuts)
 view.addEventListener('load', ({ detail: { doc, index } }) => {
+    selectedDocument = undefined
+    commentButton.hidden = true; selectionMenu.hidden = true
     applyDocumentStyle(doc)
     doc.addEventListener('selectionchange', queueSelection)
     doc.addEventListener('pointerup', queueSelection)
     doc.addEventListener('keydown', shortcuts)
+    doc.addEventListener('contextmenu', async event => {
+        event.preventDefault()
+        await selection()
+        if (!doc.getSelection()?.toString().trim()) return
+        const frame = doc.defaultView.frameElement, bounds = frame.getBoundingClientRect()
+        selectionMenu.hidden = false
+        selectionMenu.style.left = `${Math.max(0, Math.min(innerWidth - selectionMenu.offsetWidth, bounds.left + event.clientX * bounds.width / frame.clientWidth))}px`
+        selectionMenu.style.top = `${Math.max(0, Math.min(innerHeight - selectionMenu.offsetHeight, bounds.top + event.clientY * bounds.height / frame.clientHeight))}px`
+    })
     send('text', { index, text: doc.body?.textContent.slice(0, 500000) ?? '' })
     requestAnimationFrame(reportZoom)
 })
@@ -231,6 +274,7 @@ const reader = window.reader = {
         for (const { doc } of view.renderer.getContents()) applyDocumentStyle(doc)
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
         if (cfi) await view.goTo(cfi)
+        comments.draw()
         queueSelection()
         requestAnimationFrame(reportZoom)
     },
@@ -244,6 +288,8 @@ const reader = window.reader = {
         const sel = doc.getSelection(); sel.removeAllRanges(); sel.addRange(range); selection()
     },
     clearSelection() { for (const { doc } of view.renderer?.getContents() ?? []) doc.getSelection()?.removeAllRanges(); selection() },
+    setComments(items, active) { comments.set(items, active) },
+    activateComment(id, navigate) { return comments.activate(id, navigate) },
     async find(query, matchCase) {
         const generation = ++searchGeneration
         matches = []; matchIndex = -1; view.clearSearch()
@@ -268,7 +314,7 @@ const reader = window.reader = {
 // Native toolbar actions can arrive while a chapter is still loading. Keep
 // navigation and reflow ordered so a late CFI restore cannot undo a new jump.
 let operation = Promise.resolve()
-for (const name of ['open', 'configure', 'goTo', 'next', 'previous', 'find', 'findNext']) {
+for (const name of ['open', 'configure', 'goTo', 'next', 'previous', 'find', 'findNext', 'setComments', 'activateComment']) {
     const action = reader[name].bind(reader)
     reader[name] = (...args) => (operation = operation.then(() => action(...args)).catch(fail))
 }

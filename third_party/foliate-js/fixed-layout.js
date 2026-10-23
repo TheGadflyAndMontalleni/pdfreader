@@ -53,6 +53,7 @@ export class FixedLayout extends HTMLElement {
     #center
     #side
     #zoom
+    #contents = new Map()
     constructor() {
         super()
 
@@ -84,6 +85,7 @@ export class FixedLayout extends HTMLElement {
         const onZoom = srcOptionIsString ? null : srcOption?.onZoom
         const element = document.createElement('div')
         element.setAttribute('dir', 'ltr')
+        element.style.position = 'relative'
         const iframe = document.createElement('iframe')
         element.append(iframe)
         Object.assign(iframe.style, {
@@ -101,14 +103,18 @@ export class FixedLayout extends HTMLElement {
         return new Promise(resolve => {
             iframe.addEventListener('load', () => {
                 const doc = iframe.contentDocument
-                this.dispatchEvent(new CustomEvent('load', { detail: { doc, index } }))
                 const { width, height } = getViewport(doc, this.defaultViewport)
-                resolve({
-                    element, iframe,
-                    width: parseFloat(width),
-                    height: parseFloat(height),
-                    onZoom,
-                })
+                const frame = { element, iframe, doc, index,
+                    width: parseFloat(width), height: parseFloat(height), onZoom }
+                this.#contents.set(iframe, frame)
+                this.dispatchEvent(new CustomEvent('load', { detail: { doc, index } }))
+                this.dispatchEvent(new CustomEvent('create-overlayer', { detail: {
+                    doc, index, attach: overlayer => {
+                        frame.overlayer = overlayer
+                        element.append(overlayer.element)
+                    },
+                } }))
+                resolve(frame)
             }, { once: true })
             iframe.src = src
         })
@@ -162,6 +168,13 @@ export class FixedLayout extends HTMLElement {
                 flexShrink: '0',
                 marginBlock: 'auto',
             })
+            if (frame.overlayer) {
+                Object.assign(frame.overlayer.element.style, {
+                    width: iframe.style.width, height: iframe.style.height,
+                    transform: iframe.style.transform, transformOrigin: 'top left',
+                })
+                frame.overlayer.redraw()
+            }
             if (portrait && frame !== target) {
                 element.style.display = 'none'
             }
@@ -175,6 +188,7 @@ export class FixedLayout extends HTMLElement {
     }
     async #showSpread({ left, right, center, side }) {
         this.#root.replaceChildren()
+        this.#contents.clear()
         this.#left = null
         this.#right = null
         this.#center = null
@@ -306,6 +320,21 @@ export class FixedLayout extends HTMLElement {
         if (!section) return
         const { index, side } = this.getSpreadOf(section)
         await this.goToSpread(index, side)
+        if (typeof resolved.anchor === 'function') {
+            const content = [...this.#contents.values()].find(c => c.index === resolved.index)
+            const range = content && resolved.anchor(content.doc)
+            if (range?.getBoundingClientRect) {
+                const rect = range.getBoundingClientRect(), frame = content.iframe.getBoundingClientRect()
+                const host = this.getBoundingClientRect()
+                const sx = frame.width / content.iframe.clientWidth, sy = frame.height / content.iframe.clientHeight
+                const left = frame.left + rect.left * sx, top = frame.top + rect.top * sy
+                const right = left + rect.width * sx, bottom = top + rect.height * sy
+                this.scrollBy({
+                    left: left < host.left || right > host.right ? (left + right - host.left - host.right) / 2 : 0,
+                    top: top < host.top || bottom > host.bottom ? (top + bottom - host.top - host.bottom) / 2 : 0,
+                })
+            }
+        }
     }
     async next() {
         const s = this.rtl ? this.#goLeft() : this.#goRight()
@@ -316,10 +345,9 @@ export class FixedLayout extends HTMLElement {
         if (!s) return this.goToSpread(this.#index - 1, this.rtl ? 'left' : 'right', 'page')
     }
     getContents() {
-        return Array.from(this.#root.querySelectorAll('iframe'), frame => ({
-            doc: frame.contentDocument,
-            // TODO: index, overlayer
-        }))
+        return [...this.#contents.values()]
+            .filter(frame => frame.element.style.display !== 'none')
+            .map(({ doc, index, overlayer }) => ({ doc, index, overlayer }))
     }
     destroy() {
         this.#observer.unobserve(this)

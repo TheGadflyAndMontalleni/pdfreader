@@ -199,6 +199,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     markupMenu_->addSeparator();
     markupMenu_->addAction(tr("撤销上一处标注"), QKeySequence(Qt::CTRL | Qt::Key_Z), this,
                            &MainWindow::undoMarkup);
+    for (auto* action : markupMenu_->actions()) action->setProperty("pdfOnly", true);
     newCommentAction_ = markupMenu_->addAction(tr("新建批注"),
         QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_M), this, [this] { addComment(); });
     newCommentAction_->setObjectName("newComment");
@@ -442,7 +443,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     readingSplitter_->setChildrenCollapsible(false);
     readingSplitter_->setSizes({660, 320});
     connect(showCommentsAction_, &QAction::toggled, this, [this](bool show) {
-        commentPanel_->setVisible(show && document_);
+        commentPanel_->setVisible(show && (document_ || (epub() && epub()->ready())));
     });
     connect(commentPanel_, &CommentPanel::closeRequested, this, [this] { showCommentsAction_->setChecked(false); });
     connect(commentPanel_, &CommentPanel::addRequested, this, [this] { addComment(); });
@@ -514,6 +515,7 @@ void MainWindow::buildUi(bool autoLoadPlugins) {
     connect(view_, &PdfView::zoomChanged, this, &MainWindow::onZoomChanged);
     connect(view_, &PdfView::configurationChanged, this, &MainWindow::updateStatus);
     connect(view_, &PdfView::selectionChanged, this, [this](bool has) {
+        if (epub()) return;
         if (copyAction_) copyAction_->setEnabled(has);
         newCommentAction_->setEnabled(document_ && has);
         if (plugins_) plugins_->notifySelectionChanged();
@@ -676,13 +678,18 @@ EpubView* MainWindow::epub() const { return cur() ? cur()->epub.get() : nullptr;
 bool MainWindow::openEpub(const QString& path) {
     auto entry = std::make_unique<DocTab>();
     entry->path = path; entry->id = ++nextDocumentId_;
+    entry->commentSourceSize = QFileInfo(path).size();
+    entry->commentSourceModified = QFileInfo(path).lastModified().toMSecsSinceEpoch();
     entry->bookmarks = app::Session::LoadBookmarks(path);
     entry->epub = std::make_unique<EpubView>();
     auto* book = entry->epub.get();
     readingStack_->addWidget(book);
-    connect(book, &EpubView::loaded, this, [this, book] {
-        if (book != epub()) return;
-        refreshEpubToc(); updateStatus();
+    connect(book, &EpubView::loaded, this, [this, book, state = entry.get()] {
+        state->comments = app::LoadLocalComments(state->path, book->sectionCount(), app::CommentFormat::Epub)
+            .value_or(QVector<app::Comment>{});
+        if (book != epub()) { book->setComments(state->comments, state->activeComment); return; }
+        refreshEpubToc(); refreshComments(); updateStatus();
+        commentPanel_->setVisible(showCommentsAction_->isChecked());
         if (plugins_) plugins_->notifyDocumentChanged();
     });
     connect(book, &EpubView::failed, this, [this, book](const QString& error) {
@@ -700,7 +707,11 @@ bool MainWindow::openEpub(const QString& path) {
     connect(book, &EpubView::selectionChanged, this, [this, book] {
         if (book != epub()) return;
         copyAction_->setEnabled(!book->selectedText().isEmpty());
+        newCommentAction_->setEnabled(book->ready() && !book->selectionLocator().isEmpty());
         if (plugins_) plugins_->notifySelectionChanged();
+    });
+    connect(book, &EpubView::commentActivated, this, [this, book](const QString& id) {
+        if (book == epub()) activateComment(id, true, true);
     });
     connect(book, &EpubView::findChanged, this, [this, book](int current, int total, bool truncated) {
         if (book == epub()) findStatus_->setText(total ? tr("%1 / %2%3").arg(current).arg(total).arg(truncated ? "+" : "") : tr("无匹配"));
@@ -710,6 +721,8 @@ bool MainWindow::openEpub(const QString& path) {
         if (command == "find") showFindBar();
         else if (command == "open") onOpen();
         else if (command == "bookmark") addBookmark();
+        else if (command == "comment") addComment();
+        else if (command == "copy") copySelection();
         else if (command == "goTo") goToPageDialog();
         else if (command == "larger") applyZoom(1.25);
         else if (command == "smaller") applyZoom(1 / 1.25);
@@ -813,7 +826,7 @@ void MainWindow::bindTab(int index) {
         view_->clearDocument();
         readingStack_->setCurrentWidget(t->epub.get());
         refreshEpubToc(); refreshBookmarks(); refreshComments();
-        commentPanel_->hide();
+        commentPanel_->setVisible(t->epub->ready() && showCommentsAction_->isChecked());
         setWindowTitle(QString("%1 — EPUB · PDF Reader").arg(QFileInfo(t->path).fileName()));
         updateStatus();
         if (plugins_) plugins_->notifyDocumentChanged();
@@ -1038,7 +1051,7 @@ void MainWindow::editSelectedBookmark() {
 void MainWindow::closeTab(int index) {
     if (index < 0 || index >= tabCount()) return;
     if (!flushComments()) {
-        QMessageBox::warning(this, tr("批注尚未保存"), tr("无法保存本机批注，请先使用「文件 → 另存为」保存 PDF，再关闭文档。"));
+        QMessageBox::warning(this, tr("批注尚未保存"), tr("无法保存本机批注，请保留窗口并备份批注文字后重试。PDF 也可以通过「另存为」保存批注。"));
         return;
     }
     stashActiveState();
@@ -1253,7 +1266,7 @@ void MainWindow::openRecent(const QString& path) {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (!flushComments()) {
-        QMessageBox::warning(this, tr("批注尚未保存"), tr("无法保存本机批注，请先使用「文件 → 另存为」保存 PDF，再退出。"));
+        QMessageBox::warning(this, tr("批注尚未保存"), tr("无法保存本机批注，请保留窗口并备份批注文字后重试。PDF 也可以通过「另存为」保存批注。"));
         event->ignore();
         return;
     }
@@ -1430,13 +1443,14 @@ void MainWindow::refreshComments() {
     auto* entry = cur();
     const auto list = comments();
     commentPanel_->setComments(list);
-    view_->setComments(list);
+    if (epub()) epub()->setComments(list, entry->activeComment);
+    else view_->setComments(list);
     if (entry) {
-        view_->setActiveComment(entry->activeComment);
+        if (!entry->epub) view_->setActiveComment(entry->activeComment);
         commentPanel_->setActiveComment(entry->activeComment);
     }
     commentPanel_->setSaveState(entry && entry->commentsDirty ? tr("正在保存批注…") :
-        tr("批注自动保存在本机 · 另存 PDF 可随文件分享"));
+        epub() ? tr("EPUB 批注自动保存在本机") : tr("批注自动保存在本机 · 另存 PDF 可随文件分享"));
 }
 
 bool MainWindow::flushComments() {
@@ -1444,36 +1458,42 @@ bool MainWindow::flushComments() {
     for (const auto& entry : tabs_) {
         if (!entry->commentsDirty) continue;
         if (app::SaveLocalComments(entry->path, entry->comments, entry->commentSourceSize,
-            entry->commentSourceModified)) entry->commentsDirty = false;
+            entry->commentSourceModified, entry->epub ? app::CommentFormat::Epub : app::CommentFormat::Pdf)) entry->commentsDirty = false;
         else ok = false;
     }
-    if (commentPanel_) commentPanel_->setSaveState(ok ? tr("已自动保存在本机 · 另存 PDF 可随文件分享") :
-        tr("本机保存失败，请另存 PDF 保留批注"));
+    if (commentPanel_) commentPanel_->setSaveState(ok ?
+        (epub() ? tr("EPUB 批注已自动保存在本机") : tr("已自动保存在本机 · 另存 PDF 可随文件分享")) :
+        tr("本机保存失败，请保留批注文字后重试"));
     return ok;
 }
 
 bool MainWindow::addComment(const QString& text) {
     auto* entry = cur();
-    if (!entry || !view_->hasSelection()) {
+    const bool isEpub = entry && entry->epub;
+    if (!entry || (isEpub ? entry->epub->selectionLocator().isEmpty() : !view_->hasSelection())) {
         statusBar()->showMessage(tr("先拖动选中正文中的文字，再新建批注（Ctrl+Alt+M）"), 5000);
         return false;
     }
     app::Comment c;
     c.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    c.quote = view_->selectedText(); c.text = text;
-    c.anchors = view_->selectionRectsByPage();
+    c.quote = isEpub ? entry->epub->selectedText() : view_->selectedText(); c.text = text;
+    if (isEpub) {
+        c.locator = entry->epub->selectionLocator(); c.section = entry->epub->selectionSection();
+        if (!entry->epub->ready() || c.section < 0 || c.section >= entry->epub->sectionCount() || c.quote.trimmed().isEmpty()) return false;
+    } else c.anchors = view_->selectionRectsByPage();
     c.created = c.modified = QDateTime::currentDateTimeUtc();
-    if (!app::AddPdfComment(document_->handle(), c)) {
+    if (!isEpub && !app::AddPdfComment(document_->handle(), c)) {
         statusBar()->showMessage(tr("无法为这段文字添加批注"), 5000); return false;
     }
     entry->comments.push_back(c);
     std::stable_sort(entry->comments.begin(), entry->comments.end(), [](const app::Comment& a, const app::Comment& b) {
+        if (!a.locator.isEmpty()) return a.section < b.section;
         if (a.anchors.begin()->first != b.anchors.begin()->first) return a.anchors.begin()->first < b.anchors.begin()->first;
         return a.anchors.begin()->second.front().top > b.anchors.begin()->second.front().top;
     });
     entry->activeComment = c.id; entry->commentsDirty = true;
-    view_->clearSelection();
-    view_->invalidateRenderedPages();
+    clearSelection();
+    if (!isEpub) view_->invalidateRenderedPages();
     refreshComments();
     activateComment(c.id, true, true);
     flushComments();
@@ -1488,7 +1508,7 @@ bool MainWindow::editComment(const QString& id, const QString& text) {
         if (c.text == text) return true;
         auto changed = c;
         changed.text = text; changed.modified = QDateTime::currentDateTimeUtc();
-        if (!app::UpdatePdfComment(document_->handle(), changed)) {
+        if (!entry->epub && !app::UpdatePdfComment(document_->handle(), changed)) {
             commentPanel_->setSaveState(tr("批注更新失败，请保留文字后重试")); return false;
         }
         c = std::move(changed);
@@ -1505,13 +1525,13 @@ bool MainWindow::removeComment(const QString& id) {
     if (!entry) return false;
     for (auto it = entry->comments.begin(); it != entry->comments.end(); ++it) {
         if (it->id != id) continue;
-        if (!app::RemovePdfComment(document_->handle(), *it)) {
+        if (!entry->epub && !app::RemovePdfComment(document_->handle(), *it)) {
             statusBar()->showMessage(tr("删除批注失败"), 5000); return false;
         }
         entry->comments.erase(it);
         if (entry->activeComment == id) entry->activeComment.clear();
         entry->commentsDirty = true;
-        view_->invalidateRenderedPages();
+        if (!entry->epub) view_->invalidateRenderedPages();
         refreshComments();
         flushComments();
         return true;
@@ -1526,8 +1546,11 @@ bool MainWindow::activateComment(const QString& id, bool navigate, bool focusEdi
         [&](const app::Comment& c) { return c.id == id; })) return false;
     entry->activeComment = id;
     showCommentsAction_->setChecked(true);
-    view_->setActiveComment(id);
-    if (navigate) view_->goToComment(id);
+    if (entry->epub) entry->epub->activateComment(id, navigate);
+    else {
+        view_->setActiveComment(id);
+        if (navigate) view_->goToComment(id);
+    }
     commentPanel_->setActiveComment(id, focusEditor);
     return true;
 }
@@ -1629,10 +1652,11 @@ void MainWindow::updateStatus() {
     const bool fixedEpub = isEpub && epub()->fixedLayout();
     fitWidthAction_->setEnabled(!isEpub || fixedEpub); fitPageAction_->setEnabled(!isEpub || fixedEpub);
     continuousAction_->setEnabled(!fixedEpub);
-    markupMenu_->setEnabled(!isEpub);
+    markupMenu_->setEnabled(document_ || (isEpub && epub()->ready()));
     if (isEpub) {
         auto* book = epub(); const bool ready = book->ready();
-        newCommentAction_->setEnabled(false); showCommentsAction_->setEnabled(false);
+        newCommentAction_->setEnabled(ready && !book->selectionLocator().isEmpty());
+        showCommentsAction_->setEnabled(ready);
         addBookmarkAction_->setEnabled(ready); pageEdit_->setEnabled(ready); zoomBox_->setEnabled(ready);
         copyAction_->setEnabled(!book->selectedText().isEmpty());
         { QSignalBlocker block(pageEdit_); pageEdit_->setText(ready ? QString::number(book->section() + 1) : QString()); }

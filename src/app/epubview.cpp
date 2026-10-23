@@ -214,6 +214,8 @@ void EpubView::receive(const QByteArray& json) {
         emit locationChanged();
     } else if (type == "selection") {
         selection_ = value.value("text").toString().left(100000);
+        selectionLocator_ = value.value("cfi").toString().left(65536);
+        selectionSection_ = value.value("section").toInt(-1);
         const auto bounds = value.value("rect").toArray();
         selectionRect_ = bounds.size() == 4 ? QRectF(bounds.at(0).toDouble(), bounds.at(1).toDouble(), bounds.at(2).toDouble(), bounds.at(3).toDouble()) : QRectF();
         cssViewport_ = QSizeF(value.value("width").toDouble(), value.value("height").toDouble());
@@ -228,7 +230,8 @@ void EpubView::receive(const QByteArray& json) {
         sectionTexts_[value.value("index").toInt()] = value.value("text").toString().left(500000);
     } else if (type == "find") {
         emit findChanged(value.value("current").toInt(), value.value("total").toInt(), value.value("truncated").toBool());
-    } else if (type == "command") emit commandRequested(value.value("command").toString());
+    } else if (type == "commentActivated") emit commentActivated(value.value("id").toString());
+    else if (type == "command") emit commandRequested(value.value("command").toString());
     else if (type == "test") emit testResult(value);
 }
 void EpubView::configure() {
@@ -251,6 +254,15 @@ void EpubView::next() { if (ready_) evaluate("reader.next()"); }
 void EpubView::previous() { if (ready_) evaluate("reader.previous()"); }
 void EpubView::selectAll() { evaluate("reader.selectAll()"); }
 void EpubView::clearSelection() { evaluate("reader.clearSelection()"); }
+void EpubView::setComments(const QVector<app::Comment>& comments, const QString& activeId) {
+    if (!ready_) return;
+    QJsonArray values;
+    for (const auto& c : comments) values.append(QJsonObject{{"id", c.id}, {"cfi", c.locator}, {"section", c.section}});
+    evaluate("reader.setComments(" + Json(values) + "," + Json(activeId) + ")");
+}
+void EpubView::activateComment(const QString& id, bool navigate) {
+    if (ready_) evaluate("reader.activateComment(" + Json(id) + "," + (navigate ? "true" : "false") + ")");
+}
 void EpubView::copySelection() { QApplication::clipboard()->setText(selection_); }
 void EpubView::find(const QString& text, bool matchCase) { if (ready_) evaluate("reader.find(" + Json(text) + "," + (matchCase ? "true" : "false") + ")"); }
 void EpubView::findNext(bool backwards) { if (ready_) evaluate(QString("reader.findNext(%1)").arg(backwards ? "true" : "false")); }
