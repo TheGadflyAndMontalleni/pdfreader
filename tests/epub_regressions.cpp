@@ -113,6 +113,8 @@ private slots:
         QTest::newRow("EPUB 2 NCX") << QString("epub2.epub");
         QTest::newRow("EPUB 3 fixed layout") << QString("fixed.epub");
         QTest::newRow("UTF-16 chapter") << QString("utf16.epub");
+        QTest::newRow("EPUB 2 Adobe XML resource") << QString("xml-asset.epub");
+        QTest::newRow("UTF-16 Adobe XML resource") << QString("xml-asset-utf16.epub");
     }
     void formats() {
         QFETCH(QString, name);
@@ -120,11 +122,17 @@ private slots:
         QString error; QVERIFY2(view.open(fixtures_ + "/" + name, &error), qPrintable(error));
         QTRY_VERIFY_WITH_TIMEOUT(view.ready() || !view.error().isEmpty(), 20000);
         QVERIFY2(view.ready(), qPrintable(view.error()));
+        QVERIFY(query(view, "return reader.view.renderer.getContents().length;")["value"].toInt() > 0);
         QTRY_VERIFY_WITH_TIMEOUT(!view.locator().isEmpty(), 10000);
         QCOMPARE(view.sectionCount(), 2); QVERIFY(!view.toc().isEmpty());
         if (name == "utf16.epub") {
             view.goToSection(1); QTRY_COMPARE(view.section(), 1);
             QTRY_VERIFY(view.sectionText(1).contains("中文测试正文"));
+        }
+        if (!view.fixedLayout()) {
+            const auto boundaries = query(view, "await reader.view.renderer.lastSection();await reader.next();await reader.view.renderer.firstSection();await reader.previous();await reader.goTo(1);return reader.view.renderer.getContents().some(x=>x.index===1);");
+            QVERIFY2(!boundaries.contains("error"), qPrintable(QJsonDocument(boundaries).toJson()));
+            QVERIFY(boundaries["value"].toBool());
         }
     }
     void corruptArchive() {
@@ -132,6 +140,56 @@ private slots:
         QString error; QVERIFY(view.open(fixtures_ + "/broken.epub", &error));
         QTRY_VERIFY_WITH_TIMEOUT(!view.error().isEmpty(), 15000);
         QVERIFY(!view.ready());
+    }
+    void unreadableChapterReportsError() {
+        EpubView view; prepare(view);
+        QString error;
+        QSignalSpy loaded(&view, &EpubView::loaded);
+        QVERIFY(view.open(fixtures_ + "/broken-xml-asset.epub", &error));
+        QTRY_VERIFY_WITH_TIMEOUT(!view.error().isEmpty(), 15000);
+        QVERIFY(view.error().contains("XML"));
+        QVERIFY(!view.ready());
+        QCOMPARE(loaded.size(), 0);
+    }
+    void invalidSavedLocationFallsBack() {
+        const auto path = fixtures_ + "/xml-asset.epub";
+        app::DocState state;
+        state.valid = true; state.zoom = 1; state.viewMode = 1;
+        state.locator = "epubcfi(/6/999998!/4/2)";
+        app::Session::SaveDocState(path, state);
+        EpubView view; prepare(view);
+        QString error; QVERIFY(view.open(path, &error));
+        QTRY_VERIFY_WITH_TIMEOUT(view.ready() || !view.error().isEmpty(), 15000);
+        QVERIFY2(view.ready(), qPrintable(view.error()));
+        const auto result = query(view, "const c=reader.view.renderer.getContents()[0];return {index:c.index,text:!!c.doc.body.textContent.includes('serendipity')};");
+        QVERIFY2(!result.contains("error"), qPrintable(QJsonDocument(result).toJson()));
+        QCOMPARE(result["value"].toObject()["index"].toInt(-1), 0);
+        QVERIFY(result["value"].toObject()["text"].toBool());
+    }
+    void localBookCompatibility() {
+        const auto path = qEnvironmentVariable("EPUB_TEST_BOOK");
+        if (path.isEmpty()) QSKIP("Set EPUB_TEST_BOOK to check a private local book without copying it into fixtures");
+        EpubView view; prepare(view);
+        QString error;
+        QVERIFY2(view.open(path, &error), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(view.ready() || !view.error().isEmpty(), 20000);
+        QVERIFY2(view.ready(), qPrintable(view.error()));
+        QVERIFY(view.sectionCount() > 0);
+        QVERIFY(!view.toc().isEmpty());
+        QCOMPARE(query(view, "return reader.view.renderer.getContents().length;")["value"].toInt(), 1);
+        for (int i = 0; i < view.sectionCount(); ++i) {
+            const auto result = query(view, QString("await reader.goTo(%1);const {doc,index}=reader.view.renderer.getContents()[0];return {index,textLength:doc.body?.textContent.trim().length,images:doc.querySelectorAll('img,svg').length,parseError:!!doc.querySelector('parsererror')};").arg(i));
+            QVERIFY2(!result.contains("error"), qPrintable(QJsonDocument(result).toJson()));
+            QVERIFY2(view.error().isEmpty(), qPrintable(view.error()));
+            const auto value = result["value"].toObject();
+            QCOMPARE(value["index"].toInt(-1), i);
+            QVERIFY(!value["parseError"].toBool());
+            QVERIFY2(value["textLength"].toInt() > 0 || value["images"].toInt() > 0, qPrintable(QJsonDocument(result).toJson()));
+        }
+        const auto boundaries = query(view, "await reader.view.renderer.lastSection();await reader.next();await reader.view.renderer.firstSection();await reader.previous();return {contents:reader.view.renderer.getContents().length,valid:!!reader.view.lastLocation?.cfi};");
+        QVERIFY2(!boundaries.contains("error"), qPrintable(QJsonDocument(boundaries).toJson()));
+        QVERIFY(boundaries["value"].toObject()["valid"].toBool());
+        qInfo() << "Local book sections checked" << view.sectionCount();
     }
     void embeddedViewportFollowsLayout() {
         QWidget host;

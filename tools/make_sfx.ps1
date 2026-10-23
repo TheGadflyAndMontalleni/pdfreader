@@ -76,8 +76,8 @@ if (Test-Path $iconSrc) {
 # blank -- verified by tools/verify.ps1.
 [void]$sb.AppendLine(@'
 VS_VERSION_INFO VERSIONINFO
-    FILEVERSION     0,5,0,2
-    PRODUCTVERSION  0,5,0,2
+    FILEVERSION     0,5,0,3
+    PRODUCTVERSION  0,5,0,3
     FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
     FILEFLAGS       0
     FILEOS          VOS_NT_WINDOWS32
@@ -90,11 +90,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "TheGadflyAndMontalleni"
             VALUE "FileDescription",  "PDF Reader"
-            VALUE "FileVersion",      "0.5.0.2"
+            VALUE "FileVersion",      "0.5.0.3"
             VALUE "InternalName",     "PDFReader"
             VALUE "OriginalFilename", "PDFReader.exe"
             VALUE "ProductName",      "PDF Reader"
-            VALUE "ProductVersion",   "0.5.0.2"
+            VALUE "ProductVersion",   "0.5.0.3"
             VALUE "Comments",         "PDF reader with anchored margin comments and automatic table of contents"
         END
     END

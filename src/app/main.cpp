@@ -44,7 +44,7 @@ void PrepareTestOutput() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("PDF Reader"));
-    QApplication::setApplicationVersion(QStringLiteral("0.5.0-preview.2"));
+    QApplication::setApplicationVersion(QStringLiteral("0.5.0-preview.3"));
 
     // Same artwork as the .ico in the PE resource table. Windows draws the
     // taskbar button from the executable's icon, but the title bar, the

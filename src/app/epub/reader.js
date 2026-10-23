@@ -33,10 +33,18 @@ class BookBlob {
         return data
     }
 }
+const readText = async blob => {
+    const data = new Uint8Array(await blob.arrayBuffer())
+    const prefix = new TextDecoder('windows-1252').decode(data.subarray(0, 200))
+    const encoding = data[0] === 0xff && data[1] === 0xfe || data[0] === 0x3c && data[1] === 0 ? 'utf-16le'
+        : data[0] === 0xfe && data[1] === 0xff || data[0] === 0 && data[1] === 0x3c ? 'utf-16be'
+        : prefix.match(/^<\?xml[^>]*encoding=["']([^"']+)["']/i)?.[1] ?? 'utf-8'
+    return new TextDecoder(encoding).decode(data)
+}
 const sanitize = (text, type) => {
     if (!/html|xml|svg/.test(type)) return text
     const doc = new DOMParser().parseFromString(text, type === 'text/html' ? 'text/html' : 'application/xml')
-    if (doc.querySelector('parsererror')) throw Error('章节 XML 格式不正确')
+    if (doc.querySelector('parsererror')) throw Error('书内 XML 资源格式不正确')
     for (const el of doc.querySelectorAll('script,iframe,frame,object,embed,base,form,meta[http-equiv]')) el.remove()
     for (const el of doc.querySelectorAll('*')) for (const attr of [...el.attributes]) {
         if (/^on/i.test(attr.name) || attr.name === 'srcdoc' || /^(?:javascript|vbscript):/i.test(attr.value.trim())) el.removeAttribute(attr.name)
@@ -67,21 +75,18 @@ const loadBook = async () => {
         const entry = resources.get(name)
         if (!entry) return null
         const blob = await entry.getData(new BlobWriter(), { checkSignature: true })
-        const data = new Uint8Array(await blob.arrayBuffer())
-        const prefix = new TextDecoder('windows-1252').decode(data.subarray(0, 200))
-        const encoding = data[0] === 0xff && data[1] === 0xfe || data[0] === 0x3c && data[1] === 0 ? 'utf-16le'
-            : data[0] === 0xfe && data[1] === 0xff || data[0] === 0 && data[1] === 0x3c ? 'utf-16be'
-            : prefix.match(/^<\?xml[^>]*encoding=["']([^"']+)["']/i)?.[1] ?? 'utf-8'
-        const text = new TextDecoder(encoding).decode(data)
+        const text = await readText(blob)
         return /\.(?:x?html?|xml|opf|ncx|svg)$/i.test(name) ? sanitize(text, 'application/xml') : text
     }
     const loadBlob = (name, type) => resources.get(name)?.getData(new BlobWriter(type), { checkSignature: true }) ?? null
     const result = await new EPUB({ loadText, loadBlob, getSize: name => resources.get(name)?.uncompressedSize ?? 0 }).init()
     // Foliate transforms resource documents before producing blob URLs. Apply
     // the same sanitizer to manifest entries with unconventional extensions.
+    // Untransformed resources (e.g. Adobe XPGT) arrive as Blobs, not strings.
     result.transformTarget.addEventListener('data', event => {
         const detail = event.detail
-        if (/html|xml|svg/.test(detail.type)) detail.data = Promise.resolve(detail.data).then(data => sanitize(data, detail.type))
+        if (/html|xml|svg/.test(detail.type)) detail.data = Promise.resolve(detail.data)
+            .then(async data => sanitize(typeof data === 'string' ? data : await readText(data), detail.type))
     })
     return result
 }
@@ -204,8 +209,14 @@ const reader = window.reader = {
             document.body.style.background = options.dark ? '#20262b' : '#fbf8f1'
             const toc = cleanToc(book.toc?.length ? book.toc : book.sections.map((s, i) => ({ label: `第 ${i + 1} 节`, href: s.id })))
             try { await view.init({ lastLocation: config.locator || undefined }) }
-            catch (error) { console.warn('Saved EPUB position could not be restored', error) }
-            if (!view.renderer.getContents().length) await view.goTo(0)
+            catch (error) {
+                if (!config.locator) throw error
+                console.warn('Saved EPUB position could not be restored', error)
+                await view.goTo(Math.max(0, book.sections.findIndex(s => s.linear !== 'no')))
+            }
+            if (!view.renderer.getContents().length)
+                await view.goTo(Math.max(0, book.sections.findIndex(s => s.linear !== 'no')))
+            if (!view.renderer.getContents().length) throw Error('没有载入可显示的 EPUB 章节')
             for (const { doc } of view.renderer.getContents()) applyDocumentStyle(doc)
             message.hidden = true
             send('loaded', { title: String(book.metadata?.title ?? ''), sections: book.sections.length, toc, fixedLayout: view.isFixedLayout, scale: options.scale })
@@ -223,7 +234,7 @@ const reader = window.reader = {
         queueSelection()
         requestAnimationFrame(reportZoom)
     },
-    async goTo(target) { try { await view.goTo(target) } catch (e) { console.warn(e) } },
+    async goTo(target) { await view.goTo(target) },
     next() { return view.next() },
     previous() { return view.prev() },
     selectAll() {

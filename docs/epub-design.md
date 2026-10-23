@@ -76,6 +76,10 @@ pwsh -NoProfile -File tools/verify_epub.ps1 -Pdf "C:\books\sample.pdf" `
 提供翻译 DLL 时额外验证 Alt+T、离线词条和浮窗避让，并导出实际阅读界面截图。
 原有 PDF、插件和批注回归另行运行。
 
+额外覆盖旧版 EPUB 的 Adobe XPGT 附属 XML、UTF-16 编码及章节加载失败提示。
+可在运行脚本前设置 `$env:EPUB_TEST_BOOK='C:\books\sample.epub'`，逐章检查一个本机
+重排 EPUB；文件只读打开，不复制进测试样本或输出正文，设置和浏览器缓存仍隔离。
+
 ## 参考资料
 
 - [SumatraPDF 的电子书界面](https://www.sumatrapdfreader.org/docs/Customize-eBook-UI)

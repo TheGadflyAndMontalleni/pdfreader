@@ -15,7 +15,10 @@ from book iframe sandboxes. The trusted outer document still accesses their DOM
 to implement layout and selection; the book cannot execute scripts.
 `fixed-layout.js` also normalizes book-level viewport strings and SVG viewBox
 separators, rejects invalid dimensions, and uses safe centering so an enlarged
-page's left edge remains reachable. All other vendored sources remain as shipped upstream. `src/app/epub/reader.js` is our
+page's left edge remains reachable. `paginator.js` and `view.js` propagate chapter
+load errors to the host instead of leaving a blank reader; the paginator also
+releases its navigation lock on failure and stops safely at book boundaries.
+All other vendored sources remain as shipped upstream. `src/app/epub/reader.js` is our
 adapter and sanitizes book HTML before it reaches a renderer.
 
 The WebView2 browser runtime is a separately serviced Microsoft component. The
