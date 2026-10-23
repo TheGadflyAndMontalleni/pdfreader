@@ -6,6 +6,15 @@
 
 适用于 Windows 10 / 11 的 64 位 x64 电脑。安装包已包含 Qt、PDFium 等运行组件。
 
+**EPUB 试用版：[下载安装包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.4/PDFReader-Setup.exe) · [免安装版](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.4/PDFReader-Portable.exe)**。
+支持 EPUB 2／3 的目录、文字重排、字号、夜间模式、查找、阅读记录和可删除书签；
+支持选中文字后添加批注、正文高亮、卡片定位、编辑、删除和本机自动保存；可与 PDF 混合打开，并继续使用现有选词翻译插件。下载安装后使用 **Ctrl+O** 选择 `.epub`。
+安装器会在缺少 WebView2 时联网补装微软运行组件，免安装版需要电脑已有 WebView2。
+暂不支持 DRM、EPUB 打印和带批注导出，复杂版式仍在验证。[技术方案与试用范围](docs/epub-design.md)。
+preview.4 为重排和固定版式 EPUB 加入正文批注，支持浮动按钮、右键和 Ctrl+Alt+M，字号或页面缩放后仍可定位。包含此前的旧版 EPUB 打开空白、阅读区尺寸和固定版式缩放修复。[更新说明](docs/release-0.5.0-preview.4.md)。
+
+![EPUB 阅读和现有翻译插件](docs/images/epub-preview.png)
+
 ![PDF Reader 界面](docs/images/welcome.png)
 
 ## 下载与安装
@@ -69,6 +78,8 @@ Get-FileHash .\PDFReader-Setup.exe -Algorithm SHA256
 拖动选中正文，点击选区旁的 **＋ 批注**，或按 **Ctrl+Alt+M**、右键选择 **新建批注**。在右侧卡片中直接输入笔记；原文保留淡黄色高亮，当前批注显示边框、连线和页边标记。点击高亮可打开对应卡片，点击卡片上的页码可返回原文。支持多行、跨页选择和中文输入，每张卡片可单独编辑或删除。顶部 **批注** 按钮可收起或展开侧栏。
 
 批注自动保存在当前电脑的用户配置中，切换标签、关闭文档后仍保留，不会自动修改原 PDF。需要分享、备份或在其他电脑阅读时，使用 **文件 → 另存为**，批注正文与选中文字的位置会嵌入 PDF；重新打开该 PDF 时可继续编辑。本阅读器管理自己创建的批注，其他软件创建的注释会保留。若原 PDF 被外部替换或修改，旧的本机批注不再自动套用，以免位置错配。
+
+**EPUB 试用版**也支持正文批注：选中文字后点击 **＋ 批注**、右键选择 **新建批注**，或按 **Ctrl+Alt+M**。右侧卡片可编辑、删除和跳回原文，点击高亮可打开对应卡片。批注随正文位置保存，调整字号、窗口宽度或固定页面缩放后仍能定位；按书籍保存在当前电脑，不改写原 EPUB，暂不支持随 EPUB 导出或跨电脑同步。
 
 ## 插件与扩展开发
 

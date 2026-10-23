@@ -1,0 +1,18 @@
+<RCC>
+  <qresource prefix="/epub">
+    <file alias="index.html">epub/index.html</file>
+    <file alias="reader.js">epub/reader.js</file>
+    <file alias="comments.js">epub/comments.js</file>
+    <file alias="foliate/epub.js">../../third_party/foliate-js/epub.js</file>
+    <file alias="foliate/epubcfi.js">../../third_party/foliate-js/epubcfi.js</file>
+    <file alias="foliate/fixed-layout.js">../../third_party/foliate-js/fixed-layout.js</file>
+    <file alias="foliate/overlayer.js">../../third_party/foliate-js/overlayer.js</file>
+    <file alias="foliate/paginator.js">../../third_party/foliate-js/paginator.js</file>
+    <file alias="foliate/progress.js">../../third_party/foliate-js/progress.js</file>
+    <file alias="foliate/search.js">../../third_party/foliate-js/search.js</file>
+    <file alias="foliate/text-walker.js">../../third_party/foliate-js/text-walker.js</file>
+    <file alias="foliate/tts.js">../../third_party/foliate-js/tts.js</file>
+    <file alias="foliate/view.js">../../third_party/foliate-js/view.js</file>
+    <file alias="foliate/vendor/zip.js">../../third_party/foliate-js/vendor/zip.js</file>
+  </qresource>
+</RCC>

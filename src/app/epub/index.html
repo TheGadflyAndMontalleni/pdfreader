@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EPUB Reader</title><style>
+html,body{height:100%;margin:0;overflow:hidden;background:#fbf8f1;color:#343c40;font-family:system-ui}
+foliate-view{display:block;height:100%;width:100%}
+#message{position:absolute;inset:0;display:grid;place-content:center;text-align:center;padding:48px;line-height:1.8;white-space:pre-wrap}
+#message[hidden]{display:none}small{color:#788083}
+#selection-comment,#selection-menu{position:fixed;z-index:20;border:1px solid #dbc9a7;border-radius:8px;background:#fffaf0f5;color:#77502c;box-shadow:0 3px 14px #30231322;font:14px system-ui;backdrop-filter:blur(12px)}
+#selection-comment{padding:7px 12px;cursor:pointer}
+#selection-menu{padding:5px;min-width:130px}
+#selection-menu button{display:block;width:100%;padding:9px 12px;background:transparent;border:0;border-radius:5px;text-align:left;color:inherit;font:inherit;cursor:pointer}
+#selection-menu button:hover,#selection-comment:hover{background:#f7ebd1}
+#selection-comment[hidden],#selection-menu[hidden]{display:none}
+</style></head><body>
+<div id="message">正在打开 EPUB…<small>按需加载章节 · 本机排版</small></div>
+<button id="selection-comment" hidden title="新建批注（Ctrl+Alt+M）">＋ 批注</button>
+<div id="selection-menu" hidden role="menu"><button id="context-comment" role="menuitem">新建批注</button><button id="context-copy" role="menuitem">复制</button></div>
+<script type="module" src="reader.js"></script></body></html>

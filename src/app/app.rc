@@ -13,8 +13,8 @@ IDI_APP_ICON ICON "app.ico"
 // which is part of why an executable reads as "some file" rather than as an
 // installed program.
 VS_VERSION_INFO VERSIONINFO
-    FILEVERSION     0,4,1,0
-    PRODUCTVERSION  0,4,1,0
+    FILEVERSION     0,5,0,4
+    PRODUCTVERSION  0,5,0,4
     FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
     FILEFLAGS       0
     FILEOS          VOS_NT_WINDOWS32
@@ -28,11 +28,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "TheGadflyAndMontalleni"
             VALUE "FileDescription",  "PDF Reader"
-            VALUE "FileVersion",      "0.4.1.0"
+            VALUE "FileVersion",      "0.5.0.4"
             VALUE "InternalName",     "pdfreader"
             VALUE "OriginalFilename", "PDFReader.exe"
             VALUE "ProductName",      "PDF Reader"
-            VALUE "ProductVersion",   "0.4.1.0"
+            VALUE "ProductVersion",   "0.5.0.4"
             VALUE "Comments",         "PDF reader with anchored margin comments and automatic table of contents"
         END
     END

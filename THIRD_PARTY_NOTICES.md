@@ -10,6 +10,10 @@ edition extracts the same notices beside its runtime files on first launch.
 | PDFium and its bundled dependencies | chromium/8100 | BSD-style and other licenses; see `licenses/pdfium/`; [source](https://pdfium.googlesource.com/pdfium/+/refs/heads/chromium/8100/) and [binary distribution](https://github.com/bblanchon/pdfium-binaries/tree/chromium/8100) |
 | GCC runtime: libstdc++ and libgcc | 13.1.0 | GPL with the GCC Runtime Library Exception; [source](https://gcc.gnu.org/git/?p=gcc.git;a=tree;hb=releases/gcc-13.1.0) |
 | MinGW-w64 / winpthreads runtime | Toolchain mingw1310_64 | See `licenses/mingw/`; [source](https://www.mingw-w64.org/) |
+| webview | f244320ab0d82fdab98a094e02996fc26d0ffd0c | MIT; [source](https://github.com/webview/webview), `licenses/webview-LICENSE.txt` |
+| Foliate JS | 78914aef4466eb960965702401634c2cb348e9b1 | MIT; [source](https://github.com/johnfactotum/foliate-js), `licenses/foliate-js-LICENSE.txt`; book script execution disabled locally |
+| zip.js | 2.8.22 (Foliate bundled module) | BSD-3-Clause; [source](https://github.com/gildas-lormeau/zip.js/tree/v2.8.22), `licenses/zip-LICENSE.txt` |
+| Microsoft WebView2 SDK header | 1.0.1150.38 | BSD-3-Clause; `licenses/WebView2-SDK-LICENSE.txt`; [source package](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.1150.38) |
 
 The Qt DLLs and plugins are ordinary, replaceable files. Users may replace them
 with ABI-compatible builds and may reverse engineer the application as necessary
