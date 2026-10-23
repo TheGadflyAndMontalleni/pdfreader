@@ -55,6 +55,7 @@ struct EpubView::Native {
     HWND widget = nullptr;
     bool comInitialized = false;
     ~Native() {
+        if (controller) controller->Close();
         if (scaling) scaling->Release();
         if (core) core->Release();
         if (view) webview_destroy(view);
@@ -62,20 +63,30 @@ struct EpubView::Native {
     }
 };
 EpubView::EpubView(QWidget* parent) : QWidget(parent), server_(new EpubServer(this)) {
+    viewportTimer_ = new QTimer(this);
+    viewportTimer_->setSingleShot(true);
+    connect(viewportTimer_, &QTimer::timeout, this, &EpubView::syncViewport);
     setObjectName("epubView");
     setAttribute(Qt::WA_NativeWindow);
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(160, 120);
 }
-EpubView::~EpubView() { saveState(); native_.reset(); }
+EpubView::~EpubView() {
+    closing_ = true;
+    viewportTimer_->stop();
+    saveState();
+    disconnect(this, nullptr, nullptr, nullptr);
+    native_.reset();
+}
 bool EpubView::open(const QString& path, QString* error) {
     if (native_ || !server_->openBook(path, error)) return false;
     path_ = path;
     const auto saved = app::Session::LoadDocState(path);
-    fontScale_ = saved.valid ? std::clamp(saved.zoom, .65, 2.5) : 1;
+    fontScale_ = saved.valid && std::isfinite(saved.zoom) ? std::clamp(saved.zoom, .1, 8.) : 1;
     dark_ = saved.invert;
     scrolled_ = saved.viewMode == 0;
     locator_ = saved.locator;
+    fitMode_ = saved.valid ? std::clamp(saved.fitMode, 0, 2) : 2;
     native_ = std::make_unique<Native>();
     native_->comInitialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
     native_->view = webview_create(false, reinterpret_cast<void*>(winId()));
@@ -139,21 +150,35 @@ bool EpubView::open(const QString& path, QString* error) {
         webview_return(self->native_->view, id, 0, "null");
         if (data.size() <= 8 * 1024 * 1024) QTimer::singleShot(0, self, [self, data] { self->receive(data); });
     }, this);
-    resizeEvent(nullptr);
+    syncViewport();
     webview_navigate(native_->view, allowed.toUtf8().constData());
     return true;
 }
 bool EpubView::event(QEvent* event) {
-    if (event->type() == QEvent::DevicePixelRatioChange)
-        QTimer::singleShot(0, this, [this] { resizeEvent(nullptr); });
-    return QWidget::event(event);
+    const bool result = QWidget::event(event);
+    if (viewportTimer_ && (event->type() == QEvent::DevicePixelRatioChange ||
+        event->type() == QEvent::WinIdChange || event->type() == QEvent::ParentChange))
+        viewportTimer_->start(0);
+    return result;
 }
 void EpubView::resizeEvent(QResizeEvent* event) {
     if (event) QWidget::resizeEvent(event);
-    if (!native_ || !native_->widget) return;
+    // Qt can deliver resize/show before the HWND's client geometry is updated.
+    // Repeat after Qt finishes the layout, including tab switches on startup.
+    syncViewport();
+    viewportTimer_->start(0);
+}
+void EpubView::syncViewport() {
+    if (closing_ || !native_ || !native_->widget) return;
+    const auto host = reinterpret_cast<HWND>(winId());
+    if (GetParent(native_->widget) != host) SetParent(native_->widget, host);
     if (native_->scaling) native_->scaling->put_RasterizationScale(devicePixelRatioF());
-    RECT rect{}; GetClientRect(reinterpret_cast<HWND>(winId()), &rect);
+    RECT rect{}; GetClientRect(host, &rect);
     MoveWindow(native_->widget, 0, 0, rect.right, rect.bottom, TRUE);
+    // A same-size MoveWindow need not send WM_SIZE. Set the browser's bounds
+    // explicitly, and discard persisted browser zoom (book zoom is separate).
+    native_->controller->SetBoundsAndZoomFactor(rect, 1.0);
+    native_->controller->put_IsVisible(isVisible());
     native_->controller->NotifyParentWindowPositionChanged();
 }
 void EpubView::showEvent(QShowEvent* event) { QWidget::showEvent(event); resizeEvent(nullptr); }
@@ -165,15 +190,20 @@ void EpubView::evaluate(const QString& script) {
     if (native_ && native_->view) webview_eval(native_->view, script.toUtf8().constData());
 }
 void EpubView::receive(const QByteArray& json) {
+    if (closing_) return;
     const auto array = QJsonDocument::fromJson(json).array();
     if (array.isEmpty()) return;
     const auto value = array.at(0).toObject();
     const QString type = value.value("type").toString();
     if (type == "boot") {
-        evaluate("reader.open(" + Json(QJsonObject{{"locator", locator_}, {"scale", fontScale_}, {"dark", dark_}, {"scrolled", scrolled_}}) + ")");
+        syncViewport(); viewportTimer_->start(0);
+        evaluate("reader.open(" + Json(QJsonObject{{"locator", locator_}, {"scale", fontScale_}, {"dark", dark_}, {"scrolled", scrolled_}, {"fitMode", fitMode_}}) + ")");
     } else if (type == "loaded") {
         ready_ = true; title_ = value.value("title").toString(); toc_ = value.value("toc").toArray();
         sectionCount_ = value.value("sections").toInt();
+        fixedLayout_ = value.value("fixedLayout").toBool();
+        fontScale_ = value.value("scale").toDouble(fontScale_);
+        syncViewport(); viewportTimer_->start(0);
         emit loaded();
     } else if (type == "error") {
         error_ = value.value("message").toString(); ready_ = false; emit failed(error_);
@@ -188,6 +218,11 @@ void EpubView::receive(const QByteArray& json) {
         selectionRect_ = bounds.size() == 4 ? QRectF(bounds.at(0).toDouble(), bounds.at(1).toDouble(), bounds.at(2).toDouble(), bounds.at(3).toDouble()) : QRectF();
         cssViewport_ = QSizeF(value.value("width").toDouble(), value.value("height").toDouble());
         emit selectionChanged();
+    } else if (type == "zoom") {
+        const double zoom = value.value("scale").toDouble();
+        if (std::isfinite(zoom) && zoom > 0 && std::abs(zoom - effectiveZoom_) > .0001) {
+            effectiveZoom_ = zoom; emit locationChanged();
+        }
     } else if (type == "text") {
         if (sectionTexts_.size() >= 16) sectionTexts_.erase(sectionTexts_.begin());
         sectionTexts_[value.value("index").toInt()] = value.value("text").toString().left(500000);
@@ -197,9 +232,17 @@ void EpubView::receive(const QByteArray& json) {
     else if (type == "test") emit testResult(value);
 }
 void EpubView::configure() {
-    if (ready_) evaluate("reader.configure(" + Json(QJsonObject{{"scale", fontScale_}, {"dark", dark_}, {"scrolled", scrolled_}}) + ")");
+    if (ready_) evaluate("reader.configure(" + Json(QJsonObject{{"scale", fontScale_}, {"dark", dark_}, {"scrolled", scrolled_}, {"fitMode", fitMode_}}) + ")");
 }
-void EpubView::setFontScale(double scale) { fontScale_ = std::clamp(scale, .65, 2.5); configure(); emit locationChanged(); }
+void EpubView::setFontScale(double scale) {
+    fontScale_ = fixedLayout_ ? std::clamp(scale, .1, 8.) : std::clamp(scale, .65, 2.5);
+    if (fixedLayout_) fitMode_ = 0;
+    configure(); emit locationChanged();
+}
+void EpubView::setFitMode(int mode) {
+    if (!fixedLayout_) return;
+    fitMode_ = std::clamp(mode, 0, 2); configure(); emit locationChanged();
+}
 void EpubView::setDark(bool dark) { dark_ = dark; configure(); emit locationChanged(); }
 void EpubView::setScrolled(bool scrolled) { scrolled_ = scrolled; configure(); emit locationChanged(); }
 void EpubView::goTo(const QString& target) { if (ready_) evaluate("reader.goTo(" + Json(target) + ")"); }
@@ -222,6 +265,7 @@ void EpubView::saveState() {
     if (path_.isEmpty() || !ready_ || locator_.isEmpty()) return;
     app::DocState state;
     state.page = section_; state.zoom = fontScale_; state.invert = dark_; state.viewMode = scrolled_ ? 0 : 1;
+    state.fitMode = fitMode_;
     state.valid = true; state.locator = locator_;
     app::Session::SaveDocState(path_, state);
 }

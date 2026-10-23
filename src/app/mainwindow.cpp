@@ -713,6 +713,8 @@ bool MainWindow::openEpub(const QString& path) {
         else if (command == "goTo") goToPageDialog();
         else if (command == "larger") applyZoom(1.25);
         else if (command == "smaller") applyZoom(1 / 1.25);
+        else if (command == "fitWidth") setActiveFitMode(1);
+        else if (command == "fitPage") setActiveFitMode(2);
         else if (command == "dark") toggleInvert();
         else if (command == "close") closeTab(activeTab_);
         else if (command == "nextTab") nextTab();
@@ -1143,6 +1145,7 @@ int MainWindow::activeViewMode() const {
 }
 
 int MainWindow::activeFitMode() const {
+    if (epub()) return epub()->fixedLayout() ? epub()->fitMode() : 0;
     return view_ ? static_cast<int>(view_->fitMode()) : -1;
 }
 
@@ -1154,7 +1157,10 @@ bool MainWindow::setActiveViewMode(int mode) {
 }
 
 bool MainWindow::setActiveFitMode(int mode) {
-    if (epub()) return false;
+    if (epub()) {
+        if (!epub()->fixedLayout()) return false;
+        epub()->setFitMode(mode); return true;
+    }
     if (!view_) return false;
     view_->setFitMode(static_cast<PdfView::FitMode>(mode));
     return static_cast<int>(view_->fitMode()) == mode;
@@ -1620,7 +1626,9 @@ void MainWindow::updateStatus() {
     const bool isEpub = epub() != nullptr;
     for (auto* action : findChildren<QAction*>()) if (action->property("pdfOnly").toBool()) action->setEnabled(document_ != nullptr);
     lcdAction_->setEnabled(!isEpub);
-    fitWidthAction_->setEnabled(!isEpub); fitPageAction_->setEnabled(!isEpub);
+    const bool fixedEpub = isEpub && epub()->fixedLayout();
+    fitWidthAction_->setEnabled(!isEpub || fixedEpub); fitPageAction_->setEnabled(!isEpub || fixedEpub);
+    continuousAction_->setEnabled(!fixedEpub);
     markupMenu_->setEnabled(!isEpub);
     if (isEpub) {
         auto* book = epub(); const bool ready = book->ready();
@@ -1630,11 +1638,16 @@ void MainWindow::updateStatus() {
         { QSignalBlocker block(pageEdit_); pageEdit_->setText(ready ? QString::number(book->section() + 1) : QString()); }
         pageEdit_->setToolTip(tr("输入章节序号跳转；EPUB 按正文位置保存进度"));
         pageCountLabel_->setText(tr("/ %1 节").arg(book->sectionCount()));
-        { QSignalBlocker block(zoomBox_); zoomBox_->setCurrentText(QString::number(qRound(book->fontScale() * 100)) + "%"); }
-        zoomBox_->setToolTip(tr("EPUB 字号（文字重新排版）"));
-        continuousAction_->setChecked(book->scrolled()); invertAction_->setChecked(book->dark());
-        pageLabel_->setText(ready ? tr("EPUB · 第 %1 / %2 节    阅读进度 %3%    字号 %4%")
-            .arg(book->section() + 1).arg(book->sectionCount()).arg(book->progress() * 100, 0, 'f', 1).arg(qRound(book->fontScale() * 100)) : tr("EPUB · %1").arg(book->error().isEmpty() ? tr("正在加载…") : book->error()));
+        const QString zoomText = fixedEpub && book->fitMode() != 0 ?
+            (book->fitMode() == 1 ? tr("适应宽度") : tr("适应页面")) : QString::number(qRound(book->zoom() * 100)) + "%";
+        { QSignalBlocker block(zoomBox_); zoomBox_->setCurrentText(zoomText); }
+        zoomBox_->setToolTip(fixedEpub ? tr("固定版式页面缩放；可选择适应宽度或适应页面") : tr("EPUB 字号（文字重新排版）"));
+        fitWidthAction_->setChecked(fixedEpub && book->fitMode() == 1);
+        fitPageAction_->setChecked(fixedEpub && book->fitMode() == 2);
+        continuousAction_->setChecked(!fixedEpub && book->scrolled()); invertAction_->setChecked(book->dark());
+        pageLabel_->setText(ready ? tr("EPUB · 第 %1 / %2 节    阅读进度 %3%    %4 %5%")
+            .arg(book->section() + 1).arg(book->sectionCount()).arg(book->progress() * 100, 0, 'f', 1)
+            .arg(fixedEpub ? tr("缩放") : tr("字号")).arg(qRound(book->zoom() * 100)) : tr("EPUB · %1").arg(book->error().isEmpty() ? tr("正在加载…") : book->error()));
         return;
     }
     pageEdit_->setToolTip(tr("输入页码并按回车跳转")); zoomBox_->setToolTip(tr("PDF 缩放"));
@@ -1661,13 +1674,14 @@ void MainWindow::updateStatus() {
 }
 
 void MainWindow::fitWidth() {
+    if (epub()) { epub()->setFitMode(1); return; }
     if (!document_) return;
     // The view owns the fit-to-width flag and recomputes on its own resize.
     view_->setFitWidthMode(true);
 }
 
 void MainWindow::applyZoom(double factor) {
-    if (epub()) { epub()->setFontScale(epub()->fontScale() * factor); return; }
+    if (epub()) { epub()->setFontScale(epub()->zoom() * factor); return; }
     // Explicit zoom leaves fit-to-width mode.
     view_->setFitWidthMode(false);
     view_->setZoom(view_->zoom() * factor);

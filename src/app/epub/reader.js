@@ -105,6 +105,30 @@ const selection = () => {
 }
 let selectionTimer
 const queueSelection = () => { clearTimeout(selectionTimer); selectionTimer = setTimeout(selection, 35) }
+function reportZoom() {
+    if (!view.isFixedLayout) return
+    for (const { doc } of view.renderer?.getContents() ?? []) {
+        const frame = doc.defaultView.frameElement
+        const width = frame.getBoundingClientRect().width
+        if (width > 0 && frame.clientWidth > 0) {
+            send('zoom', { scale: width / frame.clientWidth })
+            break
+        }
+    }
+}
+const viewportObserver = new ResizeObserver(() => {
+    requestAnimationFrame(reportZoom); queueSelection()
+})
+viewportObserver.observe(view)
+const configureLayout = () => {
+    if (view.isFixedLayout) {
+        view.renderer.setAttribute('zoom', options.fitMode === 1 ? 'fit-width'
+            : options.fitMode === 2 ? 'fit-page' : String(options.scale))
+    } else {
+        view.renderer.setAttribute('flow', options.scrolled ? 'scrolled' : 'paginated')
+        view.renderer.setStyles(styles())
+    }
+}
 const shortcuts = event => {
     const { key, ctrlKey: ctrl, altKey: alt, shiftKey: shift } = event
     let command
@@ -114,6 +138,8 @@ const shortcuts = event => {
     else if (ctrl && key.toLowerCase() === 'g') command = 'goTo'
     else if (ctrl && ['+', '='].includes(key)) command = 'larger'
     else if (ctrl && key === '-') command = 'smaller'
+    else if (ctrl && key === '0') command = 'fitWidth'
+    else if (ctrl && key === '1') command = 'fitPage'
     else if (alt && key.toLowerCase() === 't') command = 'translate'
     else if (ctrl && key.toLowerCase() === 'w') command = 'close'
     else if (ctrl && key === 'Tab') command = shift ? 'previousTab' : 'nextTab'
@@ -131,10 +157,12 @@ view.addEventListener('load', ({ detail: { doc, index } }) => {
     doc.addEventListener('pointerup', queueSelection)
     doc.addEventListener('keydown', shortcuts)
     send('text', { index, text: doc.body?.textContent.slice(0, 500000) ?? '' })
+    requestAnimationFrame(reportZoom)
 })
 view.addEventListener('relocate', ({ detail }) => {
     send('location', { cfi: detail.cfi, section: detail.section?.current ?? 0, fraction: detail.fraction ?? 0 })
     queueSelection()
+    requestAnimationFrame(reportZoom)
 })
 view.addEventListener('external-link', e => { e.preventDefault() })
 view.addEventListener('link', e => { e.preventDefault(); reader.goTo(e.detail.href) })
@@ -166,12 +194,13 @@ const reader = window.reader = {
             book = await loadBook()
             if (!book.sections.length) throw Error('这本 EPUB 没有可阅读的章节')
             await view.open(book)
+            options.scale = view.isFixedLayout ? Math.max(.1, Math.min(8, options.scale))
+                : Math.max(.65, Math.min(2.5, options.scale))
             view.renderer.setAttribute('margin', '36px')
             view.renderer.setAttribute('gap', '6%')
             view.renderer.setAttribute('max-inline-size', '820px')
             view.renderer.setAttribute('max-column-count', '1')
-            view.renderer.setAttribute('flow', options.scrolled ? 'scrolled' : 'paginated')
-            view.renderer.setStyles?.(styles())
+            configureLayout()
             document.body.style.background = options.dark ? '#20262b' : '#fbf8f1'
             const toc = cleanToc(book.toc?.length ? book.toc : book.sections.map((s, i) => ({ label: `第 ${i + 1} 节`, href: s.id })))
             try { await view.init({ lastLocation: config.locator || undefined }) }
@@ -179,19 +208,20 @@ const reader = window.reader = {
             if (!view.renderer.getContents().length) await view.goTo(0)
             for (const { doc } of view.renderer.getContents()) applyDocumentStyle(doc)
             message.hidden = true
-            send('loaded', { title: String(book.metadata?.title ?? ''), sections: book.sections.length, toc })
+            send('loaded', { title: String(book.metadata?.title ?? ''), sections: book.sections.length, toc, fixedLayout: view.isFixedLayout, scale: options.scale })
+            requestAnimationFrame(reportZoom)
         } catch (error) { fail(error) }
     },
     async configure(config) {
         const cfi = view.lastLocation?.cfi
         options = config
         document.body.style.background = options.dark ? '#20262b' : '#fbf8f1'
-        view.renderer.setAttribute('flow', options.scrolled ? 'scrolled' : 'paginated')
-        view.renderer.setStyles?.(styles())
+        configureLayout()
         for (const { doc } of view.renderer.getContents()) applyDocumentStyle(doc)
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
         if (cfi) await view.goTo(cfi)
         queueSelection()
+        requestAnimationFrame(reportZoom)
     },
     async goTo(target) { try { await view.goTo(target) } catch (e) { console.warn(e) } },
     next() { return view.next() },

@@ -3,7 +3,7 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
 import argparse
 
-def make(path, version="3.0", fixed=False, utf16=False):
+def make(path, version="3.0", fixed=False, utf16=False, book_viewport=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     nav = '''<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="chapter1.xhtml">A quieter way to read</a><ol><li><a href="chapter1.xhtml#details">正文锚点</a></li></ol></li><li><a href="chapter2.xhtml">第二章 · 中文阅读</a></li></ol></nav></body></html>'''
     ncx = '''<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>EPUB Preview</text></docTitle><navMap><navPoint id="one" playOrder="1"><navLabel><text>First chapter</text></navLabel><content src="chapter1.xhtml"/></navPoint><navPoint id="two" playOrder="2"><navLabel><text>第二章</text></navLabel><content src="chapter2.xhtml"/></navPoint></navMap></ncx>'''
@@ -12,6 +12,9 @@ def make(path, version="3.0", fixed=False, utf16=False):
     first = f'''<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>A quieter way to read</title><meta name="viewport" content="width=800,height=1100"/><link rel="stylesheet" href="style.css"/></head><body><p class="eyebrow">EPUB PREVIEW · 01</p><h1>A quieter way<br/>to read.</h1><p class="intro">Your books, at your own pace.</p><p id="word">A little serendipity goes a long way.</p><img src="cover.svg" alt="Mountains at dusk"/><h2 id="details">Text that moves with you</h2>{paragraphs}<script>window.__epubPwned=true;fetch('https://example.com/should-never-be-requested')</script><img src="https://example.com/tracker.png" onerror="window.__epubPwned=true"/><a href="chapter2.xhtml">阅读下一章</a></body></html>'''
     second = '''<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN"><head><title>第二章</title><link rel="stylesheet" href="style.css"/></head><body><p class="eyebrow">EPUB PREVIEW · 02</p><h1>把阅读的节奏，<br/>交还给你。</h1><p>这是一段中文测试正文。EPUB 的文字会随着窗口宽度和字号重新排版，目录和书签使用正文锚点，因此无需依赖固定页码。</p><p>English and 中文 can live on the same page. Select serendipity to try the dictionary.</p><a href="chapter1.xhtml#details">返回第一章的正文锚点</a></body></html>'''
     metadata = '<meta property="rendition:layout">pre-paginated</meta>' if fixed else ''
+    if book_viewport:
+        metadata += '<meta property="rendition:viewport">width=800, height=1100</meta><meta property="rendition:spread">none</meta>'
+        first = first.replace('<meta name="viewport" content="width=800,height=1100"/>', '')
     opf = f'''<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">pdfreader-test-{version}-{fixed}</dc:identifier><dc:title>EPUB Preview · 阅读试用</dc:title><dc:language>en</dc:language><dc:creator>PDF Reader</dc:creator>{metadata}</metadata><manifest><item id="one" href="chapter1.xhtml" media-type="application/xhtml+xml"/><item id="two" href="chapter2.xhtml" media-type="application/xhtml+xml"/><item id="style" href="style.css" media-type="text/css"/><item id="image" href="cover.svg" media-type="image/svg+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx"><itemref idref="one"/><itemref idref="two"/></spine></package>'''
     if version == "2.0":
         opf = opf.replace('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>', '')
@@ -35,5 +38,6 @@ if __name__ == "__main__":
     make(args.directory / "阅读试用.epub")
     make(args.directory / "epub2.epub", "2.0")
     make(args.directory / "fixed.epub", fixed=True)
+    make(args.directory / "fixed-book-viewport.epub", fixed=True, book_viewport=True)
     make(args.directory / "utf16.epub", utf16=True)
     (args.directory / "broken.epub").write_bytes(b"PK\x03\x04broken archive")

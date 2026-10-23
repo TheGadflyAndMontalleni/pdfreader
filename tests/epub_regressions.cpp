@@ -8,6 +8,8 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QScreen>
+#include <QStackedWidget>
+#include <QVBoxLayout>
 #include "pluginmanager.h"
 #include "tocworker.h"
 #include "epubview.h"
@@ -131,6 +133,92 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!view.error().isEmpty(), 15000);
         QVERIFY(!view.ready());
     }
+    void embeddedViewportFollowsLayout() {
+        QWidget host;
+        host.setAttribute(Qt::WA_ShowWithoutActivating);
+        host.setWindowOpacity(0);
+        auto* layout = new QVBoxLayout(&host);
+        layout->setContentsMargins(0, 0, 0, 0);
+        auto* stack = new QStackedWidget;
+        layout->addWidget(stack);
+        stack->addWidget(new QWidget);
+        auto* book = new EpubView;
+        stack->addWidget(book);
+        QString error;
+        // Open while this tab and the top-level window still have their
+        // initial geometry, exactly as session restoration can do.
+        QVERIFY2(book->open(fixtures_ + "/阅读试用.epub", &error), qPrintable(error));
+        const QSize area = QGuiApplication::primaryScreen()->availableGeometry().size();
+        host.resize(std::min(900, area.width() - 60), std::min(700, area.height() - 70));
+        stack->setCurrentWidget(book); host.show();
+        QTRY_VERIFY_WITH_TIMEOUT(book->ready(), 15000);
+        auto checkViewport = [&] {
+            const auto result = query(*book, "return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio};")["value"].toObject();
+            return std::abs(result["width"].toDouble() - book->width()) < 2 &&
+                   std::abs(result["height"].toDouble() - book->height()) < 2 &&
+                   std::abs(result["dpr"].toDouble() - book->devicePixelRatioF()) < .01;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(checkViewport(), 5000);
+        host.resize(host.size() * .72);
+        QTRY_VERIFY_WITH_TIMEOUT(checkViewport(), 5000);
+        stack->setCurrentIndex(0); host.resize(host.size() * 1.15);
+        stack->setCurrentWidget(book);
+        QTRY_VERIFY_WITH_TIMEOUT(checkViewport(), 5000);
+        host.hide(); host.show();
+        QTRY_VERIFY_WITH_TIMEOUT(checkViewport(), 5000);
+        QSignalSpy capture(book, &EpubView::captured);
+        book->capture(fixtures_ + "/embedded-resize.png");
+        if (capture.isEmpty()) QVERIFY(capture.wait(5000));
+        QVERIFY(capture.takeFirst()[0].toBool());
+    }
+    void fixedPageUsesBookViewport() {
+        EpubView book; prepare(book);
+        QString error;
+        QVERIFY2(book.open(fixtures_ + "/fixed-book-viewport.epub", &error), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(book.ready(), 15000);
+        const auto result = query(book, "const d=reader.view.renderer.getContents()[0].doc,f=d.defaultView.frameElement,b=f.getBoundingClientRect();return {canvas:[f.clientWidth,f.clientHeight],frame:[b.x,b.y,b.width,b.height],viewport:[innerWidth,innerHeight]};");
+        qInfo().noquote() << QJsonDocument(result).toJson(QJsonDocument::Compact);
+        const auto value = result["value"].toObject();
+        const auto canvas = value["canvas"].toArray(), frame = value["frame"].toArray(), viewport = value["viewport"].toArray();
+        QCOMPARE(canvas[0].toInt(), 800); QCOMPARE(canvas[1].toInt(), 1100);
+        QVERIFY(frame[2].toDouble() > 100); QVERIFY(frame[3].toDouble() > 100);
+        QVERIFY(std::abs(frame[0].toDouble() + frame[2].toDouble() / 2 - viewport[0].toDouble() / 2) < 3);
+        QVERIFY(book.fixedLayout());
+        book.setFitMode(1);
+        QTRY_VERIFY_WITH_TIMEOUT(book.zoom() > .1 && book.zoom() > frame[2].toDouble() / 800 + .05, 5000);
+        book.setFontScale(.4);
+        QTRY_VERIFY_WITH_TIMEOUT(std::abs(book.zoom() - .4) < .001, 5000);
+        book.setFontScale(2);
+        QTRY_VERIFY_WITH_TIMEOUT(std::abs(book.zoom() - 2) < .001, 5000);
+        const auto enlarged = query(book, "const f=reader.view.renderer.getContents()[0].doc.defaultView.frameElement;return f.getBoundingClientRect().toJSON();")["value"].toObject();
+        QVERIFY(enlarged["x"].toDouble() >= -.5);
+        book.setFontScale(.4); QTRY_VERIFY(std::abs(book.zoom() - .4) < .001);
+        book.saveState();
+        QSignalSpy capture(&book, &EpubView::captured);
+        book.setFitMode(2);
+        QTRY_VERIFY(book.zoom() > .1 && std::abs(book.zoom() - .4) > .01);
+        book.capture(fixtures_ + "/fixed-fit-page.png");
+        if (capture.isEmpty()) QVERIFY(capture.wait(5000));
+        QVERIFY(capture.takeFirst()[0].toBool());
+    }
+    void fixedPageZoomControlsAndRestore() {
+        const QString path = fixtures_ + "/fixed-book-viewport.epub";
+        {
+            EpubView book; prepare(book);
+            QString error; QVERIFY(book.open(path, &error));
+            QTRY_VERIFY_WITH_TIMEOUT(book.ready(), 15000);
+            book.setFitMode(1); QCOMPARE(book.fitMode(), 1);
+            book.setFitMode(2); QCOMPARE(book.fitMode(), 2);
+            book.setFontScale(.3);
+            QTRY_VERIFY(std::abs(book.zoom() - .3) < .001);
+            book.saveState();
+        }
+        EpubView restored; prepare(restored);
+        QString error; QVERIFY(restored.open(path, &error));
+        QTRY_VERIFY_WITH_TIMEOUT(restored.ready(), 15000);
+        QCOMPARE(restored.fitMode(), 0);
+        QTRY_VERIFY(std::abs(restored.zoom() - .3) < .001);
+    }
     void restoresReflowPosition() {
         const QString path = fixtures_ + "/阅读试用.epub";
         QString saved;
@@ -205,6 +293,16 @@ private slots:
         QVERIFY(window.activePageCount() > 0);
         QVERIFY(window.waitForTocs());
         QVERIFY(window.tabTocNodes(0) > 0);
+        QVERIFY(window.openDocument(fixtures_ + "/fixed-book-viewport.epub"));
+        // Exercise toolbar routing in this same window: PDFium's V8 runtime
+        // cannot be torn down and initialized a second time in one test process.
+        EpubView* fixed = nullptr;
+        for (auto* candidate : window.findChildren<EpubView*>())
+            if (candidate->isVisible()) fixed = candidate;
+        QVERIFY(fixed);
+        QTRY_VERIFY_WITH_TIMEOUT(fixed->ready(), 15000);
+        QVERIFY(window.setActiveFitMode(1)); QCOMPARE(window.activeFitMode(), 1);
+        QVERIFY(window.setActiveFitMode(2)); QCOMPARE(window.activeFitMode(), 2);
         window.close();
     }
 };

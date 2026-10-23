@@ -3,26 +3,36 @@ const parseViewport = str => str
     ?.filter(x => x)
     ?.map(x => x.split('=').map(x => x.trim()))
 
+const viewportSize = value => {
+    const width = parseFloat(value?.width), height = parseFloat(value?.height)
+    return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+        ? { width, height } : null
+}
+
 const getViewport = (doc, viewport) => {
     // use `viewBox` for SVG
     if (doc.documentElement.localName === 'svg') {
         const [, , width, height] = doc.documentElement
-            .getAttribute('viewBox')?.split(/\s/) ?? []
-        return { width, height }
+            .getAttribute('viewBox')?.trim().split(/[\s,]+/) ?? []
+        const size = viewportSize({ width, height })
+        if (size) return size
     }
 
     // get `viewport` `meta` element
     const meta = parseViewport(doc.querySelector('meta[name="viewport"]')
         ?.getAttribute('content'))
-    if (meta) return Object.fromEntries(meta)
+    const declared = viewportSize(meta ? Object.fromEntries(meta) : null)
+    if (declared) return declared
 
     // fallback to book's viewport
-    if (typeof viewport === 'string') return parseViewport(viewport)
-    if (viewport?.width && viewport.height) return viewport
+    const fallback = viewportSize(typeof viewport === 'string'
+        ? Object.fromEntries(parseViewport(viewport)) : viewport)
+    if (fallback) return fallback
 
     // if no viewport (possibly with image directly in spine), get image size
     const img = doc.querySelector('img')
-    if (img) return { width: img.naturalWidth, height: img.naturalHeight }
+    const imageSize = img && viewportSize({ width: img.naturalWidth, height: img.naturalHeight })
+    if (imageSize) return imageSize
 
     // just show *something*, i guess...
     console.warn(new Error('Missing viewport properties'))
@@ -52,8 +62,8 @@ export class FixedLayout extends HTMLElement {
             width: 100%;
             height: 100%;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            justify-content: safe center;
+            align-items: safe center;
             overflow: auto;
         }`)
 

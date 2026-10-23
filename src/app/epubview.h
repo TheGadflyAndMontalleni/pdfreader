@@ -8,6 +8,7 @@
 #include "session.h"
 
 class EpubServer;
+class QTimer;
 class EpubView : public QWidget {
     Q_OBJECT
 public:
@@ -24,6 +25,9 @@ public:
     double fontScale() const { return fontScale_; }
     bool dark() const { return dark_; }
     bool scrolled() const { return scrolled_; }
+    bool fixedLayout() const { return fixedLayout_; }
+    int fitMode() const { return fitMode_; }
+    double zoom() const { return fixedLayout_ ? effectiveZoom_ : fontScale_; }
     QJsonArray toc() const { return toc_; }
     QString selectedText() const { return selection_; }
     QRect selectionScreenRect() const;
@@ -35,6 +39,7 @@ public:
     void setFontScale(double scale);
     void setDark(bool dark);
     void setScrolled(bool scrolled);
+    void setFitMode(int mode);
     void selectAll();
     void clearSelection();
     void copySelection();
@@ -66,11 +71,17 @@ private:
     EpubServer* server_ = nullptr;
     void receive(const QByteArray& json);
     void configure();
+    void syncViewport();
+    QTimer* viewportTimer_ = nullptr;
     QString path_, title_, error_, locator_, selection_;
     QRectF selectionRect_;
     QSizeF cssViewport_;
     int section_ = 0, sectionCount_ = 0;
     double progress_ = 0, fontScale_ = 1;
+    double effectiveZoom_ = 1;
+    int fitMode_ = 2;
+    bool fixedLayout_ = false;
+    bool closing_ = false;
     bool ready_ = false, dark_ = false, scrolled_ = false;
     QJsonArray toc_;
     QHash<int, QString> sectionTexts_;
