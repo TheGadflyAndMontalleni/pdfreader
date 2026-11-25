@@ -42,6 +42,10 @@ foreach ($name in 'LICENSE','THIRD_PARTY_NOTICES.md') {
 $licenses = Join-Path $target 'licenses'
 New-Item -ItemType Directory -Force -Path $licenses | Out-Null
 Copy-Item -Path (Join-Path $root 'docs/licenses/*.txt') -Destination $licenses -Force
+Copy-Item -LiteralPath (Join-Path $root 'third_party/webview/LICENSE') -Destination (Join-Path $licenses 'webview-LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $root 'third_party/foliate-js/LICENSE') -Destination (Join-Path $licenses 'foliate-js-LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $root 'third_party/foliate-js/vendor/zip-LICENSE.txt') -Destination $licenses -Force
+Copy-Item -LiteralPath (Join-Path $root 'third_party/webview2/LICENSE.txt') -Destination (Join-Path $licenses 'WebView2-SDK-LICENSE.txt') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/sbom/qtbase-6.8.3.spdx') -Destination (Join-Path $licenses 'qtbase-6.8.3.spdx') -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/pdfium/licenses') -Destination (Join-Path $licenses 'pdfium') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $root 'tools/pdfium/LICENSE') -Destination (Join-Path $licenses 'pdfium-binaries-LICENSE.txt') -Force

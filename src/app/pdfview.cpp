@@ -340,6 +340,7 @@ void PdfView::paintEvent(QPaintEvent*) {
 
     const int firstPage = (viewMode_ == ViewMode::SinglePage) ? currentPage_
                                                               : pageAtY(top);
+    const int lastPage = viewMode_ == ViewMode::SinglePage ? currentPage_ : pageAtY(bottom);
     for (int i = firstPage; i < pageCount_; ++i) {
         if (viewMode_ == ViewMode::SinglePage && i != currentPage_) break;
         const PageGeom& g = geom_[static_cast<size_t>(i)];
@@ -371,14 +372,10 @@ void PdfView::paintEvent(QPaintEvent*) {
         const QRect clip = viewport()->rect();
         painter.setPen(Qt::NoPen);
         const int top2 = verticalScrollBar()->value();
-        const int bot2 = top2 + viewportHeight();
         for (size_t i = 0; i < find_.matches.size(); ++i) {
             const pre::FindMatch& m = find_.matches[i];
-            const int pageTop = (m.page >= 0 && m.page < static_cast<int>(geom_.size()))
-                                    ? geom_[static_cast<size_t>(m.page)].top
-                                    : 0;
-            if (pageTop > bot2) break;        // matches are in document order
-            if (pageTop + 4000 < top2) continue;
+            if (m.page > lastPage) break; // matches are in reading order
+            if (m.page < firstPage) continue;
             const QRectF r = matchRectDoc(m);
             if (r.isNull()) continue;
             const QRectF v = r.translated(-horizontalScrollBar()->value(), -top2);
@@ -429,8 +426,8 @@ void PdfView::paintEvent(QPaintEvent*) {
         const QRect clip = viewport()->rect();
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(0x33, 0x99, 0xff, 0x70));
-        for (int p = s.page; p <= e.page && p < pageCount_; ++p) {
-            const auto& lines = index_->Lines(p);
+        for (int p = std::max(firstPage, s.page); p <= std::min(lastPage, e.page); ++p) {
+            const auto& lines = index_->ReadingLayout(p).lines;
             const int firstLine = (p == s.page) ? s.line : 0;
             const int lastLine  = (p == e.page) ? e.line
                                                 : static_cast<int>(lines.size()) - 1;
@@ -468,7 +465,7 @@ QRect PdfView::selectionScreenRect() {
     const int lastPage = viewMode_ == ViewMode::SinglePage ? currentPage_ :
         std::min(end.page, pageAtY(verticalScrollBar()->value() + viewportHeight()));
     for (int page = std::max(start.page, firstPage); page <= std::min(end.page, lastPage); ++page) {
-        const auto& lines = index_->Lines(page);
+        const auto& lines = index_->ReadingLayout(page).lines;
         const int firstLine = page == start.page ? start.line : 0;
         const int lastLine = page == end.page ? end.line : static_cast<int>(lines.size()) - 1;
         for (int line = std::max(0, firstLine); line <= lastLine && line < static_cast<int>(lines.size()); ++line) {
@@ -644,31 +641,13 @@ TextPos PdfView::hitTest(const QPoint& vp) {
     if (g.ptHeight <= 0 || zoom_ <= 0) return none;
 
     const double xPt = (docX - pageLeft(page)) / zoom_;
-    const double yPt = g.ptHeight - (docY - g.top) / zoom_;
-
-    const auto& lines = index_->Lines(page);
-    if (lines.empty()) return none;
-
-    // Prefer the line whose vertical span contains the point; in the gap
-    // between lines take the closest one so a drag stays continuous.
-    int    best     = 0;
-    double bestDist = std::numeric_limits<double>::max();
-    for (size_t i = 0; i < lines.size(); ++i) {
-        const auto& L = lines[i];
-        if (yPt >= L.bottom && yPt <= L.top) {
-            best = static_cast<int>(i);
-            bestDist = 0;
-            break;
-        }
-        const double d = std::min(std::fabs(yPt - L.top), std::fabs(yPt - L.bottom));
-        if (d < bestDist) {
-            bestDist = d;
-            best = static_cast<int>(i);
-        }
-    }
+    const double yPt = g.ptHeight - (docY - pageTop(page)) / zoom_;
+    const auto& layout = index_->ReadingLayout(page);
+    const int best = layout.HitLine(xPt, yPt, dragging_ && anchor_.page == page ? anchor_.line : -1);
+    if (best < 0) return none;
 
     const auto& chars = index_->Chars(page);
-    const auto& L = lines[static_cast<size_t>(best)];
+    const auto& L = layout.lines[static_cast<size_t>(best)];
     int pos = static_cast<int>(L.charIndices.size());
     for (size_t k = 0; k < L.charIndices.size(); ++k) {
         const int ci = L.charIndices[k];
@@ -686,7 +665,7 @@ QRectF PdfView::charRectDoc(int pageIndex, int lineIndex, int pos) {
     if (!index_ || pageIndex < 0 || pageIndex >= static_cast<int>(geom_.size())) {
         return QRectF();
     }
-    const auto& lines = index_->Lines(pageIndex);
+    const auto& lines = index_->ReadingLayout(pageIndex).lines;
     if (lineIndex < 0 || lineIndex >= static_cast<int>(lines.size())) return QRectF();
     const auto& L = lines[static_cast<size_t>(lineIndex)];
     if (pos < 0 || pos >= static_cast<int>(L.charIndices.size())) return QRectF();
@@ -751,7 +730,7 @@ std::map<int, std::vector<pre::MarkupRect>> PdfView::selectionRectsByPage() {
     selectionBounds(&s, &e);
 
     for (int p = s.page; p <= e.page && p < pageCount_; ++p) {
-        const auto& lines = index_->Lines(p);
+        const auto& lines = index_->ReadingLayout(p).lines;
         const auto& chars = index_->Chars(p);
         const int firstLine = (p == s.page) ? s.line : 0;
         const int lastLine  = (p == e.page) ? e.line
@@ -796,6 +775,7 @@ void PdfView::invalidateRenderedPages() {
 
 void PdfView::clearSelection() {
     selectionCommentButton_->hide();
+    dragging_ = false;
     anchor_ = TextPos();
     caret_  = TextPos();
     if (hasSelection_) {
@@ -807,7 +787,7 @@ void PdfView::clearSelection() {
 
 bool PdfView::selectLine(int pageIndex, int lineIndex) {
     if (!index_ || pageIndex < 0 || pageIndex >= pageCount_) return false;
-    const auto& lines = index_->Lines(pageIndex);
+    const auto& lines = index_->ReadingLayout(pageIndex).lines;
     if (lineIndex < 0 || lineIndex >= static_cast<int>(lines.size())) return false;
     const int n = static_cast<int>(lines[static_cast<size_t>(lineIndex)].charIndices.size());
     if (n <= 0) return false;
@@ -818,7 +798,7 @@ bool PdfView::selectLine(int pageIndex, int lineIndex) {
 void PdfView::selectAll() {
     if (!index_ || pageCount_ <= 0) return;
     const int lastPage = pageCount_ - 1;
-    const auto& lines = index_->Lines(lastPage);
+    const auto& lines = index_->ReadingLayout(lastPage).lines;
     if (lines.empty()) return;
     const int lastLine = static_cast<int>(lines.size()) - 1;
     const int n = static_cast<int>(lines[static_cast<size_t>(lastLine)].charIndices.size());
@@ -833,7 +813,7 @@ QString PdfView::selectedText() {
 
     std::string out;
     for (int p = s.page; p <= e.page && p < pageCount_; ++p) {
-        const auto& lines = index_->Lines(p);
+        const auto& lines = index_->ReadingLayout(p).lines;
         const auto& chars = index_->Chars(p);
         const int firstLine = (p == s.page) ? s.line : 0;
         const int lastLine  = (p == e.page) ? e.line : static_cast<int>(lines.size()) - 1;
@@ -850,11 +830,7 @@ QString PdfView::selectedText() {
                  k < to && k < static_cast<int>(L.charIndices.size()); ++k) {
                 const int ci = L.charIndices[static_cast<size_t>(k)];
                 if (ci < 0 || ci >= static_cast<int>(chars.size())) continue;
-                const uint32_t cp = chars[static_cast<size_t>(ci)].codepoint;
-                // Match how line text is built: whitespace controls become a
-                // space, other controls are dropped, everything else is UTF-8.
-                if (cp == '\n' || cp == '\r' || cp == '\t') out += ' ';
-                else if (cp >= 0x20) out += pre::Utf8Encode(cp);
+                out += pre::Utf8Encode(pre::ReadingCodepoint(chars[static_cast<size_t>(ci)]));
             }
         }
     }
@@ -1102,6 +1078,8 @@ void PdfView::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
     if (event->button() == Qt::LeftButton && dragging_) {
+        const TextPos p = hitTest(event->pos());
+        if (p.valid() && !(p == caret_)) setSelection(anchor_, p);
         dragging_ = false;
         if (hasSelection_) showSelectionCommentButton(event->pos());
         else {

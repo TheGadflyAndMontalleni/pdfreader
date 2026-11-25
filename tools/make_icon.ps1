@@ -11,7 +11,7 @@
 # keeps the file small and avoids the BMP/AND-mask quirks of the old format.
 [CmdletBinding()]
 param(
-    [string] $Source = 'D:\Users\RimeSun\Downloads\[CITYPNG.COM]PDF File Document Icon PNG - 800x800.png',
+    [string] $Source = "$PSScriptRoot\..\pdf-icon-refined.png",
     [string] $Out    = "$PSScriptRoot\..\src\app\app.ico",
     # Also emitted as a PNG for the Qt window icon (see app.qrc).
     [string] $PngOut = "$PSScriptRoot\..\src\app\icon.png",
@@ -30,7 +30,18 @@ $src = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $Source).Path
 Write-Host "source: $($src.Width)x$($src.Height)  ->  $Out" -ForegroundColor Cyan
 
 # Render one size to PNG bytes.
-function Get-PngBytes([System.Drawing.Image] $image, [int] $size) {
+function Get-PngBytes([System.Drawing.Bitmap] $image, [int] $size) {
+    $scale = $size / [math]::Max($image.Width, $image.Height)
+    $width = [math]::Max(1, [int][math]::Round($image.Width * $scale))
+    $height = [math]::Max(1, [int][math]::Round($image.Height * $scale))
+    $bounds = [System.Drawing.Rectangle]::new(
+        [int][math]::Floor(($size - $width) / 2),
+        [int][math]::Floor(($size - $height) / 2), $width, $height)
+
+    # Extend the source canvas into the padding for non-square artwork.
+    $padding = [System.Drawing.Color]::Transparent
+    if ($image.Width -ne $image.Height) { $padding = $image.GetPixel(0, 0) }
+
     $bmp = New-Object System.Drawing.Bitmap($size, $size,
                                             [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -38,8 +49,13 @@ function Get-PngBytes([System.Drawing.Image] $image, [int] $size) {
     $g.PixelOffsetMode    = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $g.SmoothingMode      = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
     $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-    $g.Clear([System.Drawing.Color]::Transparent)
-    $g.DrawImage($image, (New-Object System.Drawing.Rectangle(0, 0, $size, $size)))
+    $g.Clear($padding)
+    # Mirror edge pixels when resampling so the fitted image has no bright rim.
+    $edgeSampling = [System.Drawing.Imaging.ImageAttributes]::new()
+    $edgeSampling.SetWrapMode([System.Drawing.Drawing2D.WrapMode]::TileFlipXY)
+    $g.DrawImage($image, $bounds, 0, 0, $image.Width, $image.Height,
+                 [System.Drawing.GraphicsUnit]::Pixel, $edgeSampling)
+    $edgeSampling.Dispose()
     $g.Dispose()
 
     $ms = New-Object System.IO.MemoryStream

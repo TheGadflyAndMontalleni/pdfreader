@@ -130,6 +130,11 @@ add_pdfreader_plugin(my_plugin my_plugin.cpp my_plugin.json)
 
 ## 生命周期与线程
 
+EPUB 试用版复用 API 1：`DocumentInfo` 的页码 / 页数及 `goToPage()` 表示章节。
+`selectedText()` 和可选选区屏幕坐标接口可直接用于 EPUB；`pageText()` 返回已加载过的
+章节文字（近期最多 16 节），尚未加载或已移出缓存时为空。插件不要假设所有文档都有固定书页或 PDFium 后端。
+详见 [EPUB 方案与能力范围](epub-design.md)。
+
 1. 扫描仅读取嵌入元数据。错误 IID、API 不兼容或元数据无效时，不执行插件代码。
 2. 启用时调用 `initialize(host, error)`，成功后立即发送当前的 `documentChanged(info)`。
 3. 打开、切换、关闭文档触发 `documentChanged`；页码变化触发 `pageChanged`；选区变化触发 `selectionChanged`。事件在 GUI 线程合并投递，不保证发送每个中间滚动位置。需要即时快照时调用 `document()`。

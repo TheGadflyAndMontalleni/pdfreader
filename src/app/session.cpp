@@ -68,6 +68,7 @@ DocState Session::LoadDocState(const QString& path) {
     }
     st.viewMode = s.value("viewMode", 0).toInt();
     st.invert   = s.value("invert", false).toBool();
+    st.locator  = s.value("epubLocator").toString();
     st.valid    = true;
     s.endGroup();
     return st;
@@ -85,6 +86,7 @@ void Session::SaveDocState(const QString& path, const DocState& state) {
     s.setValue("fitMode", state.fitMode);
     s.setValue("viewMode", state.viewMode);
     s.setValue("invert", state.invert);
+    if (!state.locator.isEmpty()) s.setValue("epubLocator", state.locator);
     s.endGroup();
     s.sync();
 }
@@ -110,7 +112,7 @@ QVector<Bookmark> Session::LoadBookmarks(const QString& path) {
         s.setArrayIndex(i);
         const int page = s.value("page", -1).toInt();
         const QString title = s.value("title").toString().trimmed();
-        if (page >= 0 && !title.isEmpty()) bookmarks.push_back({page, title});
+        if (page >= 0 && !title.isEmpty()) bookmarks.push_back({page, title, s.value("locator").toString()});
     }
     s.endArray();
     return bookmarks;
@@ -126,6 +128,7 @@ void Session::SaveBookmarks(const QString& path, const QVector<Bookmark>& bookma
         s.setArrayIndex(i);
         s.setValue("page", bookmarks[i].page);
         s.setValue("title", bookmarks[i].title);
+        if (!bookmarks[i].locator.isEmpty()) s.setValue("locator", bookmarks[i].locator);
     }
     s.endArray();
     s.sync();

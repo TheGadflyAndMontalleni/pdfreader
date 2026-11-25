@@ -16,6 +16,7 @@ namespace app {
 struct Bookmark {
     int page = 0;
     QString title;
+    QString locator; // EPUB CFI; empty for PDF bookmarks.
 };
 
 struct DocState {
@@ -27,6 +28,7 @@ struct DocState {
     int    viewMode = 0;
     bool   invert   = false;
     bool   valid    = false;   // false when nothing was stored for this document
+    QString locator; // EPUB position survives reflow; page remains a PDF page / EPUB section.
 };
 
 class Session {

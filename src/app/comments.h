@@ -16,6 +16,10 @@ struct Comment {
     QDateTime created;
     QDateTime modified;
     std::map<int, std::vector<pre::MarkupRect>> anchors;
+    // EPUB uses a range CFI into the unmodified chapter DOM, independent of
+    // screen pagination, font size and window dimensions. PDF keeps QuadPoints.
+    QString locator;
+    int section = -1;
 };
 
 // Each page of a comment is a standard PDF highlight with /Contents and
@@ -28,8 +32,10 @@ bool RemovePdfComment(FPDF_DOCUMENT doc, const Comment& comment);
 
 // A complete local snapshot, including an empty one after deleting everything.
 // The file stamp prevents old anchors from being applied to a replaced PDF.
-std::optional<QVector<Comment>> LoadLocalComments(const QString& path, int pageCount);
+enum class CommentFormat { Pdf, Epub };
+std::optional<QVector<Comment>> LoadLocalComments(const QString& path, int pageCount,
+    CommentFormat format = CommentFormat::Pdf);
 bool SaveLocalComments(const QString& path, const QVector<Comment>& comments,
-    qint64 sourceSize = -1, qint64 sourceModified = -1);
+    qint64 sourceSize = -1, qint64 sourceModified = -1, CommentFormat format = CommentFormat::Pdf);
 
 } // namespace app

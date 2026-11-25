@@ -12,7 +12,7 @@ void LineCodepoints(const std::vector<CharInfo>& chars, const LineInfo& line,
     for (size_t k = 0; k < line.charIndices.size(); ++k) {
         const int ci = line.charIndices[k];
         if (ci < 0 || ci >= static_cast<int>(chars.size())) continue;
-        uint32_t cp = chars[static_cast<size_t>(ci)].codepoint;
+        uint32_t cp = ReadingCodepoint(chars[static_cast<size_t>(ci)]);
 
         if (cp == '\n' || cp == '\r' || cp == '\t') {
             cp = ' ';
@@ -45,7 +45,7 @@ FindResults FindInDocument(PageIndex& index, const std::string& needle,
 
     for (int page = 0; page < index.PageCount(); ++page) {
         ++out.scannedPages;
-        const auto& lines = index.Lines(page);
+        const auto& lines = index.ReadingLayout(page).lines;
         const auto& chars = index.Chars(page);
 
         std::vector<uint32_t> cps;

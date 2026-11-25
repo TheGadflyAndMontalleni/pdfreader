@@ -85,8 +85,11 @@ void CommentPanel::setComments(const QVector<app::Comment>& comments) {
         cardLayout->setContentsMargins(11, 10, 11, 9); cardLayout->setSpacing(7);
         auto* tools = new QHBoxLayout;
         auto* page = new QToolButton(card);
-        const int first = c.anchors.begin()->first + 1, last = c.anchors.rbegin()->first + 1;
-        page->setText(first == last ? tr("第 %1 页 ↗").arg(first) : tr("第 %1–%2 页 ↗").arg(first).arg(last));
+        const bool epub = !c.locator.isEmpty();
+        const int first = epub ? c.section + 1 : c.anchors.begin()->first + 1;
+        const int last = epub ? first : c.anchors.rbegin()->first + 1;
+        page->setText(epub ? tr("第 %1 节 ↗").arg(first) :
+            first == last ? tr("第 %1 页 ↗").arg(first) : tr("第 %1–%2 页 ↗").arg(first).arg(last));
         page->setObjectName("commentJump:" + c.id);
         page->setToolTip(tr("定位到正文中的这段文字"));
         connect(page, &QToolButton::clicked, this, [this, id = c.id] { emit navigateRequested(id); });
@@ -103,7 +106,7 @@ void CommentPanel::setComments(const QVector<app::Comment>& comments) {
         auto* editor = new QPlainTextEdit(card);
         editor->setObjectName("commentEditor:" + c.id);
         editor->setProperty("commentId", c.id);
-        editor->setAccessibleName(tr("第 %1 页批注正文").arg(first));
+        editor->setAccessibleName((epub ? tr("第 %1 节批注正文") : tr("第 %1 页批注正文")).arg(first));
         editor->setPlaceholderText(tr("写下你的想法…")); editor->setPlainText(c.text);
         editor->setFixedHeight(106);
         editor->setTabChangesFocus(true);

@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "fpdfview.h"
-#include "text.h"
+#include "readingorder.h"
 
 namespace pre {
 
@@ -64,8 +64,10 @@ public:
 
     // Raw characters for a page, extracted on first use.
     const std::vector<CharInfo>& Chars(int pageIndex);
-    // Lines for a page, reconstructed on first use.
+    // Physical rows for TOC analysis (a title and its page number share a row).
     const std::vector<LineInfo>& Lines(int pageIndex);
+    // Column-major text and mouse hit regions, built only when the reader needs them.
+    const ReadingPage& ReadingLayout(int pageIndex);
     // Normalised concatenation of the page's text (for title search).
     const std::string& PageText(int pageIndex);
     // /PageLabels entry for the page ("" when the document defines none).
@@ -89,6 +91,7 @@ private:
     bool          hasLabels_ = false;
     std::map<int, std::vector<CharInfo>> charsCache_;
     std::map<int, std::vector<LineInfo>> linesCache_;
+    std::map<int, ReadingPage>           readingCache_;
     std::map<int, std::string>           textCache_;
     std::map<int, std::string>           labelCache_;
 };
