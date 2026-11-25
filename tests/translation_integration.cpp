@@ -44,11 +44,15 @@ int main(int argc, char** argv) {
         for (int page = 0; page < 3; ++page) {
             FPDF_PAGE sheet = FPDFPage_New(pdf, page, 600, 800);
             for (int line = 0; line < 19; ++line) {
-                const QString text = line == 0 ? "hypothesis" : "Reading makes ideas clearer. A hypothesis can be tested.";
-                FPDF_PAGEOBJECT object = FPDFPageObj_NewTextObj(pdf, "Helvetica", 14);
-                FPDFText_SetText(object, reinterpret_cast<FPDF_WIDESTRING>(text.utf16()));
-                FPDFPageObj_Transform(object, 1, 0, 0, 1, 50, line == 0 ? 710 : 660 - (line - 1) * 24);
-                FPDFPage_InsertObject(sheet, object);
+                const int y = line == 0 ? 710 : 660 - (line - 1) * 24;
+                auto write = [&](int x, const QString& text) {
+                    FPDF_PAGEOBJECT object = FPDFPageObj_NewTextObj(pdf, "Helvetica", 14);
+                    FPDFText_SetText(object, reinterpret_cast<FPDF_WIDESTRING>(text.utf16()));
+                    FPDFPageObj_Transform(object, 1, 0, 0, 1, x, y);
+                    FPDFPage_InsertObject(sheet, object);
+                };
+                write(50, "Reading makes ideas clearer.");
+                write(330, line == 0 ? "hypothesis" : "A hypothesis can be tested.");
             }
             FPDFPage_GenerateContent(sheet); FPDF_ClosePage(sheet);
         }
@@ -62,7 +66,10 @@ int main(int argc, char** argv) {
     check(window.openDocument(fixture), "opens a synthetic document without a user key");
     window.waitForTocs(); QTest::qWait(250);
     auto* view = window.findChild<PdfView*>();
-    check(view && view->selectLine(0, 0), "selects the word on a rendered page");
+    if (!view) return 1;
+    const QPoint word = view->commentRect(0, {331, 710, 357, 719}).center().toPoint();
+    QTest::mouseDClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, word);
+    check(view->selectedText() == "hypothesis", "double-clicking the right column selects just its dictionary word");
     auto* action = window.findChild<QAction*>("plugin:org.pdfreader.deepseek-translate/translate");
     check(action != nullptr, "registers the translation command");
     if (!view || !action) return 1;

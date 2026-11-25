@@ -29,6 +29,7 @@ target_link_libraries(pdfium INTERFACE "${PDFIUM_IMPLIB}")
 add_library(pdfcore STATIC
     src/doc.cpp
     src/text.cpp
+    src/readingorder.cpp
     src/render.cpp
     src/find.cpp
     src/annot.cpp

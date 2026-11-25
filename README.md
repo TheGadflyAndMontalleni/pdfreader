@@ -6,12 +6,12 @@
 
 适用于 Windows 10 / 11 的 64 位 x64 电脑。安装包已包含 Qt、PDFium 等运行组件。
 
-**EPUB 试用版：[下载安装包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.4/PDFReader-Setup.exe) · [免安装版](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.4/PDFReader-Portable.exe)**。
+**PDF / EPUB 预览版** · [下载安装包](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.5/PDFReader-Setup.exe) · [免安装版](https://github.com/TheGadflyAndMontalleni/pdfreader/releases/download/v0.5.0-preview.5/PDFReader-Portable.exe)
 支持 EPUB 2／3 的目录、文字重排、字号、夜间模式、查找、阅读记录和可删除书签；
 支持选中文字后添加批注、正文高亮、卡片定位、编辑、删除和本机自动保存；可与 PDF 混合打开，并继续使用现有选词翻译插件。下载安装后使用 **Ctrl+O** 选择 `.epub`。
 安装器会在缺少 WebView2 时联网补装微软运行组件，免安装版需要电脑已有 WebView2。
 暂不支持 DRM、EPUB 打印和带批注导出，复杂版式仍在验证。[技术方案与试用范围](docs/epub-design.md)。
-preview.4 为重排和固定版式 EPUB 加入正文批注，支持浮动按钮、右键和 Ctrl+Alt+M，字号或页面缩放后仍可定位。包含此前的旧版 EPUB 打开空白、阅读区尺寸和固定版式缩放修复。[更新说明](docs/release-0.5.0-preview.4.md)。
+preview.5 修复双栏 PDF 拖选时串栏的问题。翻译、复制和批注按所选栏的顺序取文，批注高亮逐行定位。[本版更新](docs/release-0.5.0-preview.5.md) · [EPUB 批注说明](docs/release-0.5.0-preview.4.md)
 
 ![EPUB 阅读和现有翻译插件](docs/images/epub-preview.png)
 

@@ -544,7 +544,7 @@ QString MainWindow::pluginPageText(int pageNumber) const {
     if (epub()) return epub()->sectionText(pageNumber - 1);
     if (!index_ || pageNumber < 1 || pageNumber > index_->PageCount()) return {};
     QStringList lines;
-    for (const auto& line : index_->Lines(pageNumber - 1)) lines.append(QString::fromUtf8(line.text.c_str()));
+    for (const auto& line : index_->ReadingLayout(pageNumber - 1).lines) lines.append(QString::fromUtf8(line.text.c_str()));
     return lines.join('\n');
 }
 
@@ -1818,7 +1818,7 @@ bool MainWindow::runSelfTest(QString* report) {
     // line text, and copying must actually reach the clipboard.
     {
         const int testPage = (view_->pageCount() > 1) ? 1 : 0;
-        const auto& pageLines = index_->Lines(testPage);
+        const auto& pageLines = index_->ReadingLayout(testPage).lines;
         int chosen = -1;
         for (size_t i = 0; i < pageLines.size(); ++i) {
             if (pageLines[i].charIndices.size() >= 4) {
@@ -1880,7 +1880,7 @@ bool MainWindow::runSelfTest(QString* report) {
     {
         QString needle;
         for (int p = 0; p < view_->pageCount() && needle.isEmpty(); ++p) {
-            const auto& pageLines = index_->Lines(p);
+            const auto& pageLines = index_->ReadingLayout(p).lines;
             for (const auto& L : pageLines) {
                 const QString t = QString::fromStdString(L.text).trimmed();
                 if (t.size() >= 6 && !t.contains(QLatin1Char(' '))) {
@@ -1931,7 +1931,7 @@ bool MainWindow::runSelfTest(QString* report) {
             // CJK needle cannot exercise it. Derive one from the document.
             QString asciiNeedle;
             for (int p = 0; p < view_->pageCount() && asciiNeedle.isEmpty(); ++p) {
-                const auto& pageLines = index_->Lines(p);
+                const auto& pageLines = index_->ReadingLayout(p).lines;
                 for (const auto& L : pageLines) {
                     const QString t = QString::fromStdString(L.text);
                     static const QRegularExpression kRun(QStringLiteral("[A-Za-z]{3,}"));
@@ -1994,7 +1994,7 @@ bool MainWindow::runSelfTest(QString* report) {
         // Being the right *size* is not enough -- the page also has to land
         // inside the viewport rather than being pushed off to one side.
         {
-            const auto& pl = index_->Lines(view_->page());
+            const auto& pl = index_->ReadingLayout(view_->page()).lines;
             if (!pl.empty() && !pl[0].charIndices.empty()) {
                 const QPoint at = view_->posToViewport(TextPos{view_->page(), 0, 0});
                 lines << QString("INFO  first line of page %1 maps to x=%2 y=%3 "
@@ -2053,7 +2053,7 @@ bool MainWindow::runSelfTest(QString* report) {
     if (index_ && view_ && view_->pageCount() > 1) {
         const int markupPage = 1;
         view_->setPage(markupPage);
-        const auto& pl = index_->Lines(markupPage);
+        const auto& pl = index_->ReadingLayout(markupPage).lines;
         int lineIdx = -1;
         for (size_t i = 0; i < pl.size(); ++i) {
             if (pl[i].charIndices.size() >= 6) { lineIdx = static_cast<int>(i); break; }
@@ -2158,7 +2158,7 @@ bool MainWindow::runSelfTest(QString* report) {
             const int timingPages = std::min(10, index_->PageCount());
             for (int p = 0; p < timingPages; ++p) {
                 std::vector<pre::MarkupRect> rects;
-                for (const auto& ln : index_->Lines(p)) {
+                for (const auto& ln : index_->ReadingLayout(p).lines) {
                     if (rects.size() >= 20) break;
                     rects.push_back({ln.left, ln.bottom, ln.right, ln.top});
                 }

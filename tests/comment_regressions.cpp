@@ -1,5 +1,6 @@
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QContextMenuEvent>
 #include <QCryptographicHash>
 #include <QDir>
@@ -13,6 +14,7 @@
 #include <QTest>
 #include <QTimer>
 #include <QToolButton>
+#include <algorithm>
 #include <cstdio>
 #include "mainwindow.h"
 #include "pdfview.h"
@@ -44,6 +46,37 @@ bool MakeFixture(const QString& path) {
             FPDFAnnot_SetStringValue(foreign, "Contents", reinterpret_cast<FPDF_WIDESTRING>(note.utf16()));
             FPDFPage_CloseAnnot(foreign);
         }
+        FPDFPage_GenerateContent(page);
+        FPDF_ClosePage(page);
+    }
+    const bool ok = pre::SaveDocumentToFile(doc, path.toUtf8().constData());
+    FPDF_CloseDocument(doc);
+    return ok;
+}
+
+bool MakeColumnFixture(const QString& path) {
+    FPDF_DOCUMENT doc = FPDF_CreateNewDocument();
+    if (!doc) return false;
+    for (int p = 0; p < 2; ++p) {
+        FPDF_PAGE page = FPDFPage_New(doc, p, 600, 800);
+        auto write = [&](int x, int y, const QString& text) {
+            FPDF_PAGEOBJECT object = FPDFPageObj_NewTextObj(doc, "Courier", 12);
+            FPDFText_SetText(object, reinterpret_cast<FPDF_WIDESTRING>(text.utf16()));
+            FPDFPageObj_Transform(object, 1, 0, 0, 1, x, y);
+            FPDFPage_InsertObject(page, object);
+        };
+        write(72, 740, "A heading across both columns of the page");
+        const int right = p == 0 ? 230 : 213;
+        // Interleave PDF objects. Page two also has staggered baselines and a
+        // narrow gutter (the longest left line ends at x=204).
+        for (int row = 0; row < 4; ++row) {
+            const int y = 710 - row * 20;
+            write(right, y - (p ? 7 : 0), QString("Right %1").arg(row + 1));
+            write(row == 1 ? 52 : 45, y, row == 2 ? "Left 3 is a wider line" : QString("Left %1").arg(row + 1));
+        }
+        write(72, 625, "An interlude across both columns of the page");
+        write(45, 603, "After left one"); write(right, 603, "After right one");
+        write(45, 583, "After left two"); write(right, 583, "After right two");
         FPDFPage_GenerateContent(page);
         FPDF_ClosePage(page);
     }
@@ -217,6 +250,97 @@ int main(int argc, char** argv) {
         QTest::qWait(200);
         window.grab().save(screenshots + "/reader-comments.png");
     }
+    const QString columns = temp.path() + "/columns.pdf";
+    check(MakeColumnFixture(columns) && window.openDocument(columns), "opens a mixed full-width and two-column PDF");
+    view->setFitMode(PdfView::FitMode::Page);
+    window.waitForTocs(); app.processEvents();
+    // Mouse points come from the printed fixture, independent of inferred
+    // line indices. Test the same drag in both directions and document modes.
+    auto point = [&](int page, int x, int y) {
+        return view->commentRect(page, {double(x), double(y), double(x), double(y)}).topLeft().toPoint();
+    };
+    auto drag = [&](QPoint from, QPoint to) {
+        QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, from);
+        QTest::mouseMove(view->viewport(), to);
+        QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, to);
+    };
+    const QString left = "Left 1\nLeft 2\nLeft 3 is a wider line";
+    for (int p = 0; p < 2; ++p) {
+        view->setViewMode(p ? PdfView::ViewMode::SinglePage : PdfView::ViewMode::Continuous);
+        view->setPage(p); app.processEvents();
+        drag(point(p, 44, 713), point(p, 205, 673));
+        check(view->selectedText() == left && window.pluginSelectedText() == left,
+              "multiline left-column drag gives the translation host exactly the selected passage");
+        view->copySelectionToClipboard();
+        check(QApplication::clipboard()->text() == left, "copy uses the same column order as translation");
+        const auto geometry = view->selectionRectsByPage();
+        const auto found = geometry.find(p);
+        check(geometry.size() == 1 && found != geometry.end() && found->second.size() == 3 &&
+              std::all_of(found->second.begin(), found->second.end(), [](const auto& r) { return r.right < 207; }),
+              "left-column annotation quads end at the ink on each selected line");
+        const QRect screen = window.pluginSelectionScreenRect();
+        check(!screen.isEmpty() && screen.right() < view->viewport()->mapToGlobal(point(p, 210, 673)).x(),
+              "the translation popup anchor stays inside the selected column");
+        const int right = p ? 213 : 230;
+        const int dy = p ? -7 : 0;
+        drag(point(p, 44, 713), point(p, right - 3, 693));
+        check(view->selectedText() == "Left 1\nLeft 2",
+              "dragging past a short line into the blank gutter keeps the starting column");
+        drag(point(p, right + 60, 673 + dy), point(p, right - 1, 713 + dy));
+        check(view->selectedText() == "Right 1\nRight 2\nRight 3",
+              "backward right-column drag on aligned or staggered lines selects in reading order");
+        QTest::mouseDClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, point(p, right + 14, 693 + dy));
+        check(view->selectedText() == "Right 2", "double click selects only the line under the mouse");
+        drag(point(p, 44, 653), point(p, right + 60, 713 + dy));
+        check(view->selectedText() == "Left 4\nRight 1", "an intentional cross-column drag continues into the next column");
+    }
+    const QString expected = "A heading across both columns of the page\n" + left +
+        "\nLeft 4\nRight 1\nRight 2\nRight 3\nRight 4\nAn interlude across both columns of the page\n"
+        "After left one\nAfter left two\nAfter right one\nAfter right two";
+    check(window.pluginPageText(1) == expected && window.pluginPageText(2) == expected,
+          "whole-page translation context follows columns around full-width headings");
+    view->selectAll();
+    check(view->selectedText() == expected + "\n" + expected, "whole-document selection follows the same order across pages");
+    window.startFind("Right 2");
+    check(view->matchCount() == 2 && view->selectMatch(1) && view->selectedText() == "Right 2",
+          "a search result resolves to its original characters on the second page");
+    view->setZoom(view->zoom() * 1.35);
+    view->setPage(1);
+    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, point(1, 212, 706));
+    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, point(1, 274, 666));
+    const QString columnQuote = "Right 1\nRight 2\nRight 3";
+    check(view->selectedText() == columnQuote, "at manual zoom even a coalesced drag uses the final release position");
+    const bool added = window.addComment("two-column note");
+    const QString columnExport = temp.path() + "/column-note.pdf";
+    pre::Document columnPdf;
+    const bool saved = added && window.saveDocumentToPath(columnExport) && columnPdf.Open(columnExport.toUtf8().constData());
+    const auto notes = saved ? app::ReadPdfComments(columnPdf.handle()) : QVector<app::Comment>();
+    const auto quads = notes.size() == 1 && notes.front().anchors.count(1) ?
+        notes.front().anchors.at(1) : std::vector<pre::MarkupRect>();
+    check(notes.size() == 1 && notes.front().quote == columnQuote && quads.size() == 3 &&
+          std::all_of(quads.begin(), quads.end(), [](const auto& r) { return r.left >= 212 && r.right < 275; }),
+          "exported PDF reopens with the exact right-column quote and three separate right-column quads");
+    // A justified paragraph can have large *generated* word spaces. PDFium
+    // places some at the next glyph's pen origin, even if its ink overhangs.
+    std::vector<pre::CharInfo> paragraph;
+    for (double y : {100., 86., 72.}) {
+        auto glyph = [&](uint32_t cp, double x, double l, double r, double b, double t) {
+            pre::CharInfo c;
+            c.codepoint = cp; c.originX = x; c.originY = y; c.hasOrigin = true;
+            c.left = l; c.right = r; c.bottom = y + b; c.top = y + t;
+            c.fontSize = 10; c.generated = cp == ' '; c.hyphen = cp == 2;
+            paragraph.push_back(c);
+        };
+        glyph('A', 45, 45, 51, 0, 7);
+        glyph(' ', 59, 59, 59, 0, 0);
+        glyph('j', 59, 58, 62, -2, 5);
+        glyph(',', 62, 62, 64, -2, 1);
+        glyph(2, 65, 65, 68, 2, 3);
+    }
+    const auto justified = pre::BuildReadingPage(0, paragraph);
+    check(justified.columns.size() == 1 && justified.lines.size() == 3 &&
+          std::all_of(justified.lines.begin(), justified.lines.end(), [](const auto& l) { return l.text == "A j,-"; }),
+          "justification, an overhanging letter, low punctuation and a visible wrap hyphen stay on one reading line");
     std::printf("COMMENT REGRESSIONS %s (%d checks, %d failures)\n", failures == 0 ? "PASS" : "FAIL", checks, failures);
     return failures == 0 ? 0 : 1;
 }

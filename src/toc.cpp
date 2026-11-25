@@ -176,6 +176,12 @@ const std::vector<LineInfo>& PageIndex::Lines(int pageIndex) {
     return linesCache_.emplace(pageIndex, std::move(lines)).first->second;
 }
 
+const ReadingPage& PageIndex::ReadingLayout(int pageIndex) {
+    auto it = readingCache_.find(pageIndex);
+    if (it != readingCache_.end()) return it->second;
+    return readingCache_.emplace(pageIndex, BuildReadingPage(pageIndex, Chars(pageIndex))).first->second;
+}
+
 const std::string& PageIndex::PageText(int pageIndex) {
     auto it = textCache_.find(pageIndex);
     if (it != textCache_.end()) return it->second;
