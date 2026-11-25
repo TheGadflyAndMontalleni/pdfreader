@@ -9,6 +9,9 @@
 #ifndef AppVersion
   #define AppVersion "0.4.0"
 #endif
+#define IconSource ProjectRoot + "\src\app\app.ico"
+; A new artwork path gives Explorer a new cache entry at every icon size.
+#define DocumentIcon "document-" + LowerCase(Copy(GetSHA256OfFile(IconSource), 1, 16)) + ".ico"
 #ifdef InstallerTest
   #define ProductId "TheGadflyAndMontalleni.PDFReader.InstallerTest"
   #define ProductName "PDF Reader Installer Test"
@@ -46,7 +49,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#ProjectRoot}\dist
 OutputBaseFilename={#OutputName}
-SetupIconFile={#ProjectRoot}\src\app\app.ico
+SetupIconFile={#IconSource}
 UninstallDisplayIcon={app}\pdfreader.exe
 UninstallFilesDir={app}\uninstall
 Compression=lzma2/max
@@ -74,6 +77,7 @@ chinesesimp.ReadyLabel2a=将创建快捷方式并添加 PDF / EPUB“打开方�
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#IconSource}"; DestDir: "{app}\icons"; DestName: "{#DocumentIcon}"; Flags: ignoreversion
 Source: "{#WebViewSetup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView2
 
 [Icons]
@@ -82,15 +86,15 @@ Name: "{#DesktopShortcut}"; Filename: "{app}\pdfreader.exe"; WorkingDir: "{app}"
 
 [Registry]
 Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.pdf"; ValueType: string; ValueName: ""; ValueData: "PDF 文档"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.pdf\DefaultIcon"; ValueType: string; ValueData: """{app}\pdfreader.exe"",0"
+Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.pdf\DefaultIcon"; ValueType: string; ValueData: """{app}\icons\{#DocumentIcon}"",0"
 Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.pdf\shell\open\command"; ValueType: string; ValueData: """{app}\pdfreader.exe"" ""%1"""
 Root: HKCU; Subkey: "{#ClassesRoot}\.pdf\OpenWithProgids"; ValueType: string; ValueName: "PDFReader.pdf"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.epub"; ValueType: string; ValueName: ""; ValueData: "EPUB 电子书"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.epub\DefaultIcon"; ValueType: string; ValueData: """{app}\pdfreader.exe"",0"
+Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.epub\DefaultIcon"; ValueType: string; ValueData: """{app}\icons\{#DocumentIcon}"",0"
 Root: HKCU; Subkey: "{#ClassesRoot}\PDFReader.epub\shell\open\command"; ValueType: string; ValueData: """{app}\pdfreader.exe"" ""%1"""
 Root: HKCU; Subkey: "{#ClassesRoot}\.epub\OpenWithProgids"; ValueType: string; ValueName: "PDFReader.epub"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "PDF Reader"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\DefaultIcon"; ValueType: string; ValueData: """{app}\pdfreader.exe"",0"
+Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\DefaultIcon"; ValueType: string; ValueData: """{app}\icons\{#DocumentIcon}"",0"
 Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\shell\open\command"; ValueType: string; ValueData: """{app}\pdfreader.exe"" ""%1"""
 Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""
 Root: HKCU; Subkey: "{#ClassesRoot}\Applications\pdfreader.exe\SupportedTypes"; ValueType: string; ValueName: ".epub"; ValueData: ""

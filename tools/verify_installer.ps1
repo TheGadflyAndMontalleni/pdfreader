@@ -83,6 +83,14 @@ try {
     }
     Check $matching 'all installed binaries, plugins, notices and licenses match the release payload'
     $exe = Join-Path $install 'pdfreader.exe'
+    $iconHash = (Get-FileHash -LiteralPath (Join-Path $root 'src/app/app.ico') -Algorithm SHA256).Hash.ToLowerInvariant()
+    $documentIcon = Join-Path $install ('icons/document-' + $iconHash.Substring(0, 16) + '.ico')
+    $iconLocation = '"{0}",0' -f $documentIcon
+    $handlers = @('PDFReader.pdf', 'PDFReader.epub', 'Applications\pdfreader.exe')
+    Check ((Get-FileHash -LiteralPath $documentIcon).Hash -eq $iconHash) 'the installed document icon contains the original multi-size artwork'
+    foreach ($handler in $handlers) {
+        Check ((Get-Item -LiteralPath "$classes\$handler\DefaultIcon").GetValue('') -eq $iconLocation) "$handler registers the artwork-specific icon path"
+    }
     $command = (Get-Item -LiteralPath "$classes\PDFReader.pdf\shell\open\command").GetValue('')
     Check ($command -eq "`"$exe`" `"%1`"") 'PDF Open with command quotes both executable and PDF path'
     Check ((Get-Item -LiteralPath "$classes\PDFReader.pdf").GetValue('') -eq 'PDF 文档') 'installer preserves Chinese text in application registration'
@@ -108,13 +116,23 @@ try {
     Check (@(Get-ChildItem (Join-Path $testRoot 'user-data/toc-cache') -Filter '*.json').Count -gt 0) 'installed reader starts its isolated directory worker and saves the result'
     $userData = Get-Content -LiteralPath $env:PDFREADER_SETTINGS -Raw
     Set-Content -LiteralPath (Join-Path $install 'LICENSE') -Value 'old version placeholder'
+    # Reproduce the previous installer, which only registered the executable.
+    Remove-Item -LiteralPath $documentIcon
+    foreach ($handler in $handlers) {
+        Set-Item -LiteralPath "$classes\$handler\DefaultIcon" -Value ('"{0}",0' -f $exe)
+    }
     $r = Run $setup $arguments 'upgrade-output.log'
     Check ($r.Code -eq 0 -and (Get-FileHash (Join-Path $install 'LICENSE')).Hash -eq (Get-FileHash (Join-Path $payload 'LICENSE')).Hash) 'reinstall upgrades existing payload files'
+    Check ((Get-FileHash -LiteralPath $documentIcon).Hash -eq $iconHash) 'upgrade installs the document icon for existing users'
+    foreach ($handler in $handlers) {
+        Check ((Get-Item -LiteralPath "$classes\$handler\DefaultIcon").GetValue('') -eq $iconLocation) "upgrade migrates the legacy $handler icon registration"
+    }
     Check ((Get-Content -LiteralPath $env:PDFREADER_SETTINGS -Raw) -eq $userData) 'upgrade preserves the reader settings file'
     $userFile = Join-Path $install 'my-document.txt'
     Set-Content -LiteralPath $userFile -Value 'This user-added file must survive uninstall.'
     $r = Run $uninstaller @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$testRoot/uninstall.log") 'uninstall-output.log'
     Check ($r.Code -eq 0 -and -not (Test-Path -LiteralPath $exe)) 'native uninstaller removes the installed application'
+    Check (-not (Test-Path -LiteralPath $documentIcon)) 'uninstall removes the registered document icon file'
     Check (-not (Test-Path -LiteralPath $uninstallKey)) 'uninstall removes its Windows application entry'
     Check (-not (Test-Path -LiteralPath "$classes\PDFReader.pdf") -and
         ((Get-Item -LiteralPath $shared).GetValueNames() -contains 'OtherReader.pdf') -and
